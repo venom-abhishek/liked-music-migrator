@@ -121,7 +121,12 @@ async function openCollection(collection) {
   filterInput.value = "";
   showView("detail");
   detailTitleEl.textContent = `${collection.title} — loading…`;
-  trackListEl.innerHTML = "";
+  // Note: deliberately not clearing trackListEl's DOM here. The virtualized
+  // list's spacer/viewport elements live inside it; wiping innerHTML detaches
+  // them while `vlist` still holds references to the now-orphaned nodes, so
+  // every render after the first quietly updates elements nothing displays.
+  // Clearing rows through the list's own API (below) keeps it intact.
+  if (vlist) vlist.setItems([]);
 
   try {
     const tracks = await fetchAllTracks(client, collection.browseId);
@@ -132,6 +137,7 @@ async function openCollection(collection) {
   } catch (err) {
     detailTitleEl.textContent = `${collection.title} — failed to load`;
     trackListEl.textContent = String(err.message || err);
+    vlist = null; // container's contents were just replaced with plain text; rebuild the list fresh next time
   }
 }
 

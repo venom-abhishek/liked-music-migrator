@@ -12,6 +12,7 @@
       <p id="tab-status" class="status">Checking…</p>
       <nav>
         <button data-view="collections" class="active">Library</button>
+        <button data-view="import">Import</button>
         <button data-view="log">Activity &amp; Undo</button>
       </nav>
     </header>
@@ -50,6 +51,47 @@
       </div>
       <p class="hint">Undo restores membership, not position — a restored track is re-added to the end.</p>
       <div id="track-list" class="vlist-container"></div>
+    </section>
+
+    <section id="view-import" hidden>
+      <div class="toolbar">
+        <p id="jiosaavn-status" class="status">Checking…</p>
+        <button id="jiosaavn-refresh">Re-check</button>
+      </div>
+      <div class="toolbar">
+        <button id="jiosaavn-load">Load JioSaavn library</button>
+      </div>
+
+      <div id="jiosaavn-inventory" hidden>
+        <label class="row-check"><input type="checkbox" id="jiosaavn-include-liked" checked /> Liked Songs (<span id="jiosaavn-liked-count">0</span>)</label>
+        <div id="jiosaavn-playlist-list"></div>
+
+        <div class="toolbar mode-toolbar">
+          <label><input type="radio" name="import-mode" value="liked" checked /> Like all songs</label>
+          <label><input type="radio" name="import-mode" value="single" /> Single playlist:</label>
+          <input type="text" id="single-playlist-name" value="JioSaavn Import" />
+          <label><input type="radio" name="import-mode" value="mirror" /> Mirror playlists (source name = destination playlist)</label>
+        </div>
+
+        <button id="import-preview">Preview matches</button>
+      </div>
+
+      <p id="import-progress" class="hint"></p>
+
+      <div id="import-preview-results" hidden>
+        <p id="import-summary"></p>
+        <details>
+          <summary>Review (needs a human look) — <span id="review-count">0</span></summary>
+          <ul id="review-list"></ul>
+        </details>
+        <details>
+          <summary>Not found — <span id="notfound-count">0</span></summary>
+          <ul id="notfound-list"></ul>
+        </details>
+        <button id="import-commit">Commit import (AUTO matches only)</button>
+      </div>
+
+      <div id="import-commit-results" hidden></div>
     </section>
 
     <section id="view-log" hidden>

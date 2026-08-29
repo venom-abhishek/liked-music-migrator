@@ -14,6 +14,7 @@ export const ACTION_TYPES = {
   UNLIKE: "unlike", // tracks un-liked (removed from Liked Songs)
   MOVE: "move", // tracks added to destination + removed from source
   PLAYLIST_CREATE: "playlist_create",
+  IMPORT: "import", // tracks written to a destination from an external source (e.g. JioSaavn)
 };
 
 function openDb() {
@@ -148,6 +149,20 @@ export async function performUndo(client, action) {
       }
       break;
     }
+
+    case ACTION_TYPES.IMPORT:
+      // Reverse of "wrote these tracks to destination": remove them again.
+      if (action.destination.kind === "liked") {
+        for (const videoId of videoIds) {
+          await client.removeLikeSong(videoId);
+        }
+      } else {
+        const items = action.tracks
+          .filter((t) => t.setVideoId)
+          .map((t) => ({ videoId: t.videoId, setVideoId: t.setVideoId }));
+        if (items.length) await client.removePlaylistItems(action.destination.id, items);
+      }
+      break;
 
     case ACTION_TYPES.PLAYLIST_CREATE:
       await client.deletePlaylist(action.createdPlaylistId);

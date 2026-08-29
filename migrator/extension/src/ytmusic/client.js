@@ -56,6 +56,7 @@ export function makeYtMusicClient() {
     browse: (browseId) => call("browse", [browseId]),
     browseContinuationBody: (continuation) => call("browseContinuationBody", [continuation]),
     browseContinuationUrl: (browseId, continuation) => call("browseContinuationUrl", [browseId, continuation]),
+    search: (query, params) => call("search", [query, params]),
     likeSong: (videoId) => call("likeSong", [videoId]),
     removeLikeSong: (videoId) => call("removeLikeSong", [videoId]),
     createPlaylist: (title, description, privacyStatus) =>

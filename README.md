@@ -6,11 +6,12 @@ Amazon Music planned) — using your own already-logged-in browser sessions.
 No servers, no accounts to create, no paid services, and **no AI/LLM calls at
 runtime**: matching is deterministic string+duration logic.
 
-> **Status: Phase 1 complete.** The manager works for YouTube Music:
-> list playlists + Liked Songs with counts, open a collection, sort/filter/
-> multi-select, remove/un-like/move, and an undo-capable action log. The
-> importer and Amazon support are not built yet — see [Roadmap](#roadmap)
-> below, or the full implementation contract at
+> **Status: Phase 2 complete.** The manager works for YouTube Music (list,
+> sort/filter/select, remove/un-like/move, undo), and JioSaavn liked songs +
+> playlists can be extracted, matched, and imported (Like all / single
+> playlist / mirror playlists), with a preview step before anything is
+> written and undo after. Amazon support is not built yet — see
+> [Roadmap](#roadmap) below, or the full implementation contract at
 > [`migrator/EXTENSION_SPEC.md`](migrator/EXTENSION_SPEC.md).
 
 ## What's in this repo
@@ -71,7 +72,7 @@ Phased build order (each phase gates the next):
    logged.
 2. **Phase 1 — Manager core (YouTube Music only).** ✅ List playlists + Liked
    Songs, sort/filter/select, remove/un-like/move, action log, undo.
-3. **Phase 2 — JioSaavn importer.** Extraction + deterministic matching +
+3. **Phase 2 — JioSaavn importer.** ✅ Extraction + deterministic matching +
    three import modes (Like all / single playlist / mirrored playlists).
 4. **Phase 3 — Amazon Music source.** Needs live endpoint discovery.
 5. **Phase 4 — Power features.** Duplicate finder, artist/album bulk select,

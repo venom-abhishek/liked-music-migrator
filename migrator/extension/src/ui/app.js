@@ -2,6 +2,10 @@ import { findYtMusicTab, makeYtMusicClient } from "../ytmusic/client.js";
 import { fetchAllTracks, fetchAllLibraryPlaylists, CollectionState } from "../engine/reconcile.js";
 import { parsePlaylistHeaderMeta, playlistIdToBrowseId } from "../ytmusic/parsers.js";
 import { logAction, listActions, performUndo, ACTION_TYPES } from "../storage/log.js";
+import { findJioSaavnTab, makeJioSaavnClient } from "../sources/jiosaavnClient.js";
+import { getJioSaavnInventory, extractJioSaavnSongs } from "../engine/jiosaavnExtract.js";
+import { matchSong, AUTO, REVIEW, NOT_FOUND } from "../engine/matcher.js";
+import { commitImport } from "../engine/importer.js";
 
 const LIKED_ID = "LM";
 const LIKED_BROWSE_ID = "VLLM";
@@ -10,6 +14,7 @@ const LIKED_BROWSE_ID = "VLLM";
 // created once and reused for the lifetime of the page. See client.js for
 // why it's stateless rather than bound to a tabId captured at load time.
 const client = makeYtMusicClient();
+const jiosaavnClient = makeJioSaavnClient();
 
 let collections = []; // { kind: 'liked'|'playlist', id, browseId, title, count }
 let currentCollection = null;
@@ -25,6 +30,7 @@ const el = (id) => document.getElementById(id);
 const tabStatusEl = el("tab-status");
 const viewCollections = el("view-collections");
 const viewDetail = el("view-collection-detail");
+const viewImport = el("view-import");
 const viewLog = el("view-log");
 const collectionsListEl = el("collections-list");
 const detailTitleEl = el("detail-title");
@@ -44,6 +50,7 @@ let visibleTracks = [];
 function showView(name) {
   viewCollections.hidden = name !== "collections";
   viewDetail.hidden = name !== "detail";
+  viewImport.hidden = name !== "import";
   viewLog.hidden = name !== "log";
   document.querySelectorAll("nav button[data-view]").forEach((b) => {
     b.classList.toggle("active", b.dataset.view === name);
@@ -394,8 +401,170 @@ function describeAction(action) {
       return `Moved ${action.tracks.length} from "${action.source.title}" to "${action.destination.title}"`;
     case ACTION_TYPES.PLAYLIST_CREATE:
       return `Created playlist "${action.destination.title}"`;
+    case ACTION_TYPES.IMPORT:
+      return `Imported ${action.tracks.length} from JioSaavn into "${action.destination.title}"`;
     default:
       return action.type;
+  }
+}
+
+// ---- Import (JioSaavn) ----
+
+const jiosaavnStatusEl = el("jiosaavn-status");
+const jiosaavnInventoryEl = el("jiosaavn-inventory");
+const jiosaavnLikedCountEl = el("jiosaavn-liked-count");
+const jiosaavnPlaylistListEl = el("jiosaavn-playlist-list");
+const importProgressEl = el("import-progress");
+const importPreviewResultsEl = el("import-preview-results");
+const importSummaryEl = el("import-summary");
+const reviewCountEl = el("review-count");
+const reviewListEl = el("review-list");
+const notfoundCountEl = el("notfound-count");
+const notfoundListEl = el("notfound-list");
+const importCommitResultsEl = el("import-commit-results");
+
+let jiosaavnInventory = null;
+let previewMatched = []; // [{ song, match }] — every decision, not just AUTO
+
+async function ensureJioSaavnTab() {
+  const tab = await findJioSaavnTab();
+  if (!tab) {
+    jiosaavnStatusEl.textContent = "No open jiosaavn.com tab found. Open one, log in, and click Re-check.";
+    jiosaavnStatusEl.className = "status err";
+    return false;
+  }
+  jiosaavnStatusEl.textContent = `Connected: ${tab.url}`;
+  jiosaavnStatusEl.className = "status ok";
+  return true;
+}
+
+async function loadJioSaavnLibrary() {
+  if (!(await ensureJioSaavnTab())) return;
+  el("jiosaavn-load").disabled = true;
+  el("jiosaavn-load").textContent = "Loading…";
+  try {
+    jiosaavnInventory = await getJioSaavnInventory(jiosaavnClient);
+    jiosaavnLikedCountEl.textContent = String(jiosaavnInventory.liked.count);
+    jiosaavnPlaylistListEl.innerHTML = "";
+    for (const p of jiosaavnInventory.playlists) {
+      const label = document.createElement("label");
+      label.className = "row-check";
+      label.innerHTML = `<input type="checkbox" checked data-playlist="${escapeHtml(p.name)}" /> ${escapeHtml(p.name)} (${p.count})`;
+      jiosaavnPlaylistListEl.appendChild(label);
+    }
+    jiosaavnInventoryEl.hidden = false;
+  } catch (err) {
+    jiosaavnStatusEl.textContent = `Failed to load: ${err.message || err}`;
+    jiosaavnStatusEl.className = "status err";
+  } finally {
+    el("jiosaavn-load").disabled = false;
+    el("jiosaavn-load").textContent = "Load JioSaavn library";
+  }
+}
+
+function getJioSaavnSelection() {
+  const includeLiked = el("jiosaavn-include-liked").checked;
+  const checkedNames = new Set(
+    [...jiosaavnPlaylistListEl.querySelectorAll("input[data-playlist]:checked")].map((i) => i.dataset.playlist)
+  );
+  return {
+    liked: includeLiked ? jiosaavnInventory.liked : null,
+    playlists: jiosaavnInventory.playlists.filter((p) => checkedNames.has(p.name)),
+  };
+}
+
+function getImportMode() {
+  return document.querySelector('input[name="import-mode"]:checked').value;
+}
+
+async function runPreview() {
+  if (!jiosaavnInventory) return;
+  const selection = getJioSaavnSelection();
+  importPreviewResultsEl.hidden = true;
+  importCommitResultsEl.hidden = true;
+  previewMatched = [];
+
+  importProgressEl.textContent = "Extracting from JioSaavn…";
+  let extraction;
+  try {
+    extraction = await extractJioSaavnSongs(jiosaavnClient, selection);
+  } catch (err) {
+    importProgressEl.textContent = `Extraction failed: ${err.message || err}`;
+    return;
+  }
+  if (extraction.warnings.length) {
+    importProgressEl.textContent = extraction.warnings.join(" | ");
+  }
+
+  const songs = extraction.songs;
+  const counts = { [AUTO]: 0, [REVIEW]: 0, [NOT_FOUND]: 0 };
+  for (let i = 0; i < songs.length; i++) {
+    importProgressEl.textContent = `Matching ${i + 1}/${songs.length}: ${songs[i].title}`;
+    let match;
+    try {
+      match = await matchSong(songs[i], client);
+    } catch (err) {
+      match = { decision: NOT_FOUND, reason: String(err.message || err) };
+    }
+    counts[match.decision] = (counts[match.decision] || 0) + 1;
+    previewMatched.push({ song: songs[i], match });
+  }
+
+  importProgressEl.textContent = "";
+  importSummaryEl.textContent =
+    `${songs.length} tracks — ${counts[AUTO]} will auto-import, ${counts[REVIEW]} need review, ${counts[NOT_FOUND]} not found.`;
+  reviewCountEl.textContent = String(counts[REVIEW]);
+  notfoundCountEl.textContent = String(counts[NOT_FOUND]);
+  reviewListEl.innerHTML = "";
+  notfoundListEl.innerHTML = "";
+  for (const { song, match } of previewMatched) {
+    if (match.decision === REVIEW) {
+      const li = document.createElement("li");
+      const cand = match.chosen;
+      li.textContent = `${song.title} — ${song.artists}  →  best guess: "${cand.title}" — ${cand.artists} (${cand.combined.toFixed(0)}%)`;
+      reviewListEl.appendChild(li);
+    } else if (match.decision === NOT_FOUND) {
+      const li = document.createElement("li");
+      li.textContent = `${song.title} — ${song.artists}`;
+      notfoundListEl.appendChild(li);
+    }
+  }
+  importPreviewResultsEl.hidden = false;
+}
+
+async function runCommit() {
+  const autoMatched = previewMatched.filter((e) => e.match.decision === AUTO);
+  if (autoMatched.length === 0) {
+    importCommitResultsEl.hidden = false;
+    importCommitResultsEl.textContent = "Nothing to commit — no AUTO matches.";
+    return;
+  }
+  const mode = getImportMode();
+  const singlePlaylistName = el("single-playlist-name").value.trim() || "JioSaavn Import";
+  if (!confirm(`Write ${autoMatched.length} AUTO-matched track(s) to YouTube Music now?`)) return;
+
+  el("import-commit").disabled = true;
+  importCommitResultsEl.hidden = false;
+  importCommitResultsEl.textContent = "Loading current YouTube Music state…";
+
+  try {
+    const likedTracks = await fetchAllTracks(client, LIKED_BROWSE_ID);
+    const playlists = (await fetchAllLibraryPlaylists(client)).map((p) => ({ id: p.playlistId, title: p.title }));
+
+    const results = await commitImport(client, autoMatched, mode, singlePlaylistName, { likedTracks, playlists }, (text) => {
+      importCommitResultsEl.textContent = text;
+    });
+
+    const summary = { added: 0, already_present: 0, duplicate: 0, error: 0 };
+    for (const r of results) summary[r.outcome] = (summary[r.outcome] || 0) + 1;
+    importCommitResultsEl.textContent =
+      `Done: ${summary.added} added, ${summary.already_present} already present, ` +
+      `${summary.duplicate} duplicate, ${summary.error} error(s).`;
+  } catch (err) {
+    importCommitResultsEl.textContent = `Commit failed partway through: ${err.message || err}. ` +
+      "Anything already written is logged under Activity & Undo and safe to leave — re-running import will skip it as already present.";
+  } finally {
+    el("import-commit").disabled = false;
   }
 }
 
@@ -405,8 +574,14 @@ document.querySelectorAll("nav button[data-view]").forEach((btn) => {
   btn.addEventListener("click", () => {
     showView(btn.dataset.view);
     if (btn.dataset.view === "log") renderLogView();
+    if (btn.dataset.view === "import") ensureJioSaavnTab();
   });
 });
+
+el("jiosaavn-refresh").addEventListener("click", ensureJioSaavnTab);
+el("jiosaavn-load").addEventListener("click", () => loadJioSaavnLibrary().catch((e) => alert(e.message || e)));
+el("import-preview").addEventListener("click", () => runPreview().catch((e) => alert(e.message || e)));
+el("import-commit").addEventListener("click", () => runCommit().catch((e) => alert(e.message || e)));
 
 el("refresh-collections").addEventListener("click", loadCollections);
 el("back-to-collections").addEventListener("click", () => showView("collections"));

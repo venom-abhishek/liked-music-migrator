@@ -295,6 +295,93 @@ function parseGridPlaylistItems(rawItems) {
   return playlists;
 }
 
+// ---- Search (for the matcher — engine/matcher.js) ----
+
+// The "songs" filter param, ported from ytmusicapi's parsers/search.py
+// get_search_params()/_get_param2(): filtered_param1 "EgWKAQ" + songs'
+// param2 "II" + the no-ignore-spelling param3 "AWoMEA4QChADEAQQCRAF".
+export const SONGS_FILTER_PARAM = "EgWKAQIIAWoMEA4QChADEAQQCRAF";
+
+// Port of parsers/songs.py's parse_song_runs: classifies each run in a
+// search-result's remaining flex-column text as artist, album (an MPRE/
+// release_detail-prefixed browseId), duration, year, or views.
+function parseSongRuns(runs) {
+  const parsed = { artists: [], album: null, duration_seconds: null };
+  for (let i = 0; i < runs.length; i++) {
+    if (i % 2 === 1) continue; // odd indexes are always " • " separators
+    const run = runs[i];
+    const text = run.text;
+    const browseId = nav(run, NAVIGATION_BROWSE_ID, true);
+    if (run.navigationEndpoint) {
+      const item = { name: text, id: browseId };
+      if (browseId && (browseId.startsWith("MPRE") || browseId.includes("release_detail"))) {
+        parsed.album = item;
+      } else {
+        parsed.artists.push(item);
+      }
+    } else if (/^(\d+:)*\d+:\d+$/.test(text)) {
+      parsed.duration = text;
+      parsed.duration_seconds = parseDuration(text);
+    } else if (/^\d{4}$/.test(text)) {
+      parsed.year = text;
+    } else if (i > 0 && /^\d\S* \S*$/.test(text)) {
+      parsed.views = text.split(" ")[0];
+    } else {
+      parsed.artists.push({ name: text, id: null });
+    }
+  }
+  return parsed;
+}
+
+function parseSongSearchItem(data, resultType) {
+  const videoId = nav(data, ["overlay", "musicItemThumbnailOverlayRenderer", "content", "musicPlayButtonRenderer", "playNavigationEndpoint", "watchEndpoint", "videoId"], true);
+  const title = getItemText(data, 0);
+  let runs = [];
+  const flex1 = getFlexColumnItem(data, 1);
+  if (flex1) runs = runs.concat(flex1.text.runs);
+  const flex2 = getFlexColumnItem(data, 2);
+  if (flex2) runs = runs.concat([{ text: "" }], flex2.text.runs);
+  const info = parseSongRuns(runs);
+  return {
+    resultType,
+    videoId,
+    title,
+    artists: info.artists,
+    album: info.album,
+    duration_seconds: info.duration_seconds,
+  };
+}
+
+/**
+ * Extracts song/video candidates from a `search` response. Only "Songs" and
+ * "Videos" shelves are parsed — matcher.js never needs albums/artists/
+ * playlists/etc, matching the reference matcher's own resultType filter.
+ */
+export function parseSearchResults(response) {
+  const results = [];
+  if (!response || !response.contents) return results;
+  let root = response.contents;
+  if (root.tabbedSearchResultsRenderer) {
+    root = nav(root, ["tabbedSearchResultsRenderer", "tabs", 0, "tabRenderer", "content"], true) || {};
+  }
+  const sectionList = nav(root, ["sectionListRenderer", "contents"], true) || [];
+  for (const section of sectionList) {
+    const shelf = section.musicShelfRenderer;
+    if (!shelf || !shelf.contents) continue;
+    const shelfTitle = nav(shelf, ["title", "runs", 0, "text"], true) || "";
+    let resultType = null;
+    if (shelfTitle === "Songs") resultType = "song";
+    else if (shelfTitle === "Videos") resultType = "video";
+    else continue;
+    for (const item of shelf.contents) {
+      const data = item[MRLIR];
+      if (!data) continue;
+      results.push(parseSongSearchItem(data, resultType));
+    }
+  }
+  return results;
+}
+
 export function validatePlaylistId(playlistId) {
   return playlistId.startsWith("VL") ? playlistId.slice(2) : playlistId;
 }

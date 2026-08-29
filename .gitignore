@@ -1,0 +1,23 @@
+# --- Secrets: real YT Music / JioSaavn session material. Never commit these. ---
+migrator/data/browser.json
+migrator/data/cookie.txt
+migrator/data/curl.txt
+migrator/datacurl - Copy.txt
+migrator/data/
+migrator/config.yaml.local
+
+# --- Python ---
+migrator/.venv/
+**/__pycache__/
+*.pyc
+
+# --- Node / build tooling (extension UI may add these later) ---
+node_modules/
+dist/
+build/
+*.log
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+.vscode/

@@ -56,10 +56,17 @@ export function makeYtMusicClient() {
     browse: (browseId) => call("browse", [browseId]),
     browseContinuationBody: (continuation) => call("browseContinuationBody", [continuation]),
     browseContinuationUrl: (browseId, continuation) => call("browseContinuationUrl", [browseId, continuation]),
+    search: (query, params) => call("search", [query, params]),
     likeSong: (videoId) => call("likeSong", [videoId]),
     removeLikeSong: (videoId) => call("removeLikeSong", [videoId]),
-    createPlaylist: (title, description, privacyStatus) =>
-      call("createPlaylist", [title, description, privacyStatus]),
+    // playlist/create's raw response is a big object (actions, tracking
+    // params, etc.) with the new id at .playlistId — every caller wants just
+    // the id (this bit ytmusicapi's own create_playlist() unwraps the same
+    // way), so unwrap it here rather than in every call site.
+    createPlaylist: async (title, description, privacyStatus) => {
+      const data = await call("createPlaylist", [title, description, privacyStatus]);
+      return (data && data.playlistId) || data;
+    },
     deletePlaylist: (playlistId) => call("deletePlaylist", [playlistId]),
     addPlaylistItems: (playlistId, videoIds) => call("addPlaylistItems", [playlistId, videoIds]),
     removePlaylistItems: (playlistId, items) => call("removePlaylistItems", [playlistId, items]),

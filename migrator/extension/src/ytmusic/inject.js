@@ -95,6 +95,9 @@
 
     // Generic reads, used by the manager for both playlists and Liked Songs.
     browse: (browseId) => callInnertube("browse", { browseId }),
+    // `params` is the filter token (e.g. the "songs" filter); omit for an
+    // unfiltered search across all result types.
+    search: (query, params) => callInnertube("search", params ? { query, params } : { query }),
     // "2025-style" continuation used when paging a playlist/Liked-Songs track
     // list: the continuation token replaces browseId in the POST body.
     browseContinuationBody: (continuation) => callInnertube("browse", { continuation }),

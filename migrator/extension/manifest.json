@@ -10,7 +10,9 @@
     "service_worker": "background.js"
   },
   "host_permissions": [
-    "https://music.youtube.com/*"
+    "https://music.youtube.com/*",
+    "https://www.jiosaavn.com/*",
+    "https://*.jiosaavn.com/*"
   ],
   "content_scripts": [
     {
@@ -22,6 +24,11 @@
       "matches": ["https://music.youtube.com/*"],
       "js": ["src/ytmusic/inject.js"],
       "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.jiosaavn.com/*", "https://*.jiosaavn.com/*"],
+      "js": ["src/sources/jiosaavn.js"],
       "run_at": "document_idle"
     }
   ]

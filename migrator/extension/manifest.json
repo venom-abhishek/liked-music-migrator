@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Music Manager & Migrator",
+  "version": "0.1.0",
+  "description": "Manage your YouTube Music library and migrate liked songs/playlists from other services, using your own already-logged-in browser sessions. No servers, no accounts, no AI at runtime.",
+  "action": {
+    "default_title": "YouTube Music Manager & Migrator"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "https://music.youtube.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://music.youtube.com/*"],
+      "js": ["src/ytmusic/bridge.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://music.youtube.com/*"],
+      "js": ["src/ytmusic/inject.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    }
+  ]
+}

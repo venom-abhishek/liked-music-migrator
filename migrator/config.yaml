@@ -1,0 +1,24 @@
+# Thresholds and tuning for the matching + writing engine.
+# No AI/LLM settings here by design — matching is deterministic string+duration logic only.
+
+matching:
+  auto_combined_threshold: 85
+  auto_artist_threshold: 70
+  review_combined_threshold: 70
+  duration_exact_tolerance_sec: 3
+  duration_max_tolerance_sec: 15
+  duration_neutral_score: 70
+  weight_title: 0.50
+  weight_artist: 0.35
+  weight_duration: 0.15
+  song_result_bonus: 5
+  search_limit: 5
+
+importer:
+  delay_min_sec: 1.0
+  delay_max_sec: 2.5
+  retry_attempts: 3
+
+extraction:
+  max_scroll_attempts: 500
+  idle_rounds_before_stable: 3

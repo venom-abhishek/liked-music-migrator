@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+data/browser.json
+data/curl.txt
+data/cookie.txt
+data/ledger.csv
+data/review.csv
+data/not_found.csv
+data/jiosaavn.csv
+data/jiosaavn_raw.json
+data/migrator.log
+data/*_profile/

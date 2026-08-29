@@ -477,6 +477,11 @@ function getImportMode() {
   return document.querySelector('input[name="import-mode"]:checked').value;
 }
 
+function setProgress(el, text, state) {
+  el.textContent = text;
+  el.className = state ? `status ${state}` : "status";
+}
+
 async function runPreview() {
   if (!jiosaavnInventory) return;
   const selection = getJioSaavnSelection();
@@ -484,22 +489,22 @@ async function runPreview() {
   importCommitResultsEl.hidden = true;
   previewMatched = [];
 
-  importProgressEl.textContent = "Extracting from JioSaavn…";
+  const previewBtn = el("import-preview");
+  previewBtn.disabled = true;
+  setProgress(importProgressEl, "Extracting from JioSaavn…", "busy");
   let extraction;
   try {
     extraction = await extractJioSaavnSongs(jiosaavnClient, selection);
   } catch (err) {
-    importProgressEl.textContent = `Extraction failed: ${err.message || err}`;
+    setProgress(importProgressEl, `Extraction failed: ${err.message || err}`, "err");
+    previewBtn.disabled = false;
     return;
-  }
-  if (extraction.warnings.length) {
-    importProgressEl.textContent = extraction.warnings.join(" | ");
   }
 
   const songs = extraction.songs;
   const counts = { [AUTO]: 0, [REVIEW]: 0, [NOT_FOUND]: 0 };
   for (let i = 0; i < songs.length; i++) {
-    importProgressEl.textContent = `Matching ${i + 1}/${songs.length}: ${songs[i].title}`;
+    setProgress(importProgressEl, `Matching ${i + 1}/${songs.length}: ${songs[i].title}`, "busy");
     let match;
     try {
       match = await matchSong(songs[i], client);
@@ -510,7 +515,9 @@ async function runPreview() {
     previewMatched.push({ song: songs[i], match });
   }
 
-  importProgressEl.textContent = "";
+  previewBtn.disabled = false;
+  const warningText = extraction.warnings.length ? ` (${extraction.warnings.join(" | ")})` : "";
+  setProgress(importProgressEl, `Matching complete.${warningText}`, "ok");
   importSummaryEl.textContent =
     `${songs.length} tracks — ${counts[AUTO]} will auto-import, ${counts[REVIEW]} need review, ${counts[NOT_FOUND]} not found.`;
   reviewCountEl.textContent = String(counts[REVIEW]);
@@ -534,37 +541,47 @@ async function runPreview() {
 
 async function runCommit() {
   const autoMatched = previewMatched.filter((e) => e.match.decision === AUTO);
+  importCommitResultsEl.hidden = false;
   if (autoMatched.length === 0) {
-    importCommitResultsEl.hidden = false;
-    importCommitResultsEl.textContent = "Nothing to commit — no AUTO matches.";
+    setProgress(importCommitResultsEl, "Nothing to commit — no AUTO matches.", null);
     return;
   }
   const mode = getImportMode();
   const singlePlaylistName = el("single-playlist-name").value.trim() || "JioSaavn Import";
   if (!confirm(`Write ${autoMatched.length} AUTO-matched track(s) to YouTube Music now?`)) return;
 
-  el("import-commit").disabled = true;
-  importCommitResultsEl.hidden = false;
-  importCommitResultsEl.textContent = "Loading current YouTube Music state…";
+  const commitBtn = el("import-commit");
+  const previewBtn = el("import-preview");
+  commitBtn.disabled = true;
+  previewBtn.disabled = true;
+  setProgress(importCommitResultsEl, "Loading current YouTube Music state…", "busy");
 
   try {
     const likedTracks = await fetchAllTracks(client, LIKED_BROWSE_ID);
     const playlists = (await fetchAllLibraryPlaylists(client)).map((p) => ({ id: p.playlistId, title: p.title }));
 
     const results = await commitImport(client, autoMatched, mode, singlePlaylistName, { likedTracks, playlists }, (text) => {
-      importCommitResultsEl.textContent = text;
+      setProgress(importCommitResultsEl, text, "busy");
     });
 
     const summary = { added: 0, already_present: 0, duplicate: 0, error: 0 };
     for (const r of results) summary[r.outcome] = (summary[r.outcome] || 0) + 1;
-    importCommitResultsEl.textContent =
+    setProgress(
+      importCommitResultsEl,
       `Done: ${summary.added} added, ${summary.already_present} already present, ` +
-      `${summary.duplicate} duplicate, ${summary.error} error(s).`;
+        `${summary.duplicate} duplicate, ${summary.error} error(s).`,
+      summary.error > 0 ? "err" : "ok"
+    );
   } catch (err) {
-    importCommitResultsEl.textContent = `Commit failed partway through: ${err.message || err}. ` +
-      "Anything already written is logged under Activity & Undo and safe to leave — re-running import will skip it as already present.";
+    setProgress(
+      importCommitResultsEl,
+      `Commit failed partway through: ${err.message || err}. Check Activity & Undo for whatever ` +
+        "did get written before the failure (if anything) — re-running import will skip it as already present.",
+      "err"
+    );
   } finally {
-    el("import-commit").disabled = false;
+    commitBtn.disabled = false;
+    previewBtn.disabled = false;
   }
 }
 

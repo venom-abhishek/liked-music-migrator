@@ -51,6 +51,16 @@ header h1 {
   color: var(--danger);
 }
 
+.status.busy {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+#import-progress,
+#import-commit-results {
+  font-size: 0.9rem;
+}
+
 nav {
   display: flex;
   gap: 0.5rem;

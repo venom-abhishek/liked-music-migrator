@@ -36,7 +36,7 @@
     return `${ts}_${hex}`;
   }
 
-  async function callInnertube(endpoint, extraBody) {
+  async function callInnertube(endpoint, extraBody, urlExtraParams = "") {
     if (!window.ytcfg || typeof window.ytcfg.get !== "function") {
       throw new Error(
         "ytcfg is not available on this page. Make sure this tab has finished " +
@@ -61,7 +61,7 @@
     // this one Authorization header.
     const hashValue = await computeSapisidHash(sapisid, ORIGIN);
 
-    const url = `${ORIGIN}/youtubei/v1/${endpoint}?alt=json&key=${encodeURIComponent(apiKey)}`;
+    const url = `${ORIGIN}/youtubei/v1/${endpoint}?alt=json&key=${encodeURIComponent(apiKey)}${urlExtraParams}`;
     const resp = await fetch(url, {
       method: "POST",
       credentials: "include",
@@ -83,12 +83,45 @@
     return { status: resp.status, ok: resp.ok, data };
   }
 
-  // ---- Phase 0 actions: the minimum needed to prove the auth module. ----
+  function validatePlaylistId(playlistId) {
+    return playlistId.startsWith("VL") ? playlistId.slice(2) : playlistId;
+  }
+
   const ACTIONS = {
     // Liked Songs is a synthetic playlist with the fixed browseId "VLLM".
     browseLikedSongs: () => callInnertube("browse", { browseId: "VLLM" }),
     likeSong: (videoId) => callInnertube("like/like", { target: { videoId } }),
     removeLikeSong: (videoId) => callInnertube("like/removelike", { target: { videoId } }),
+
+    // Generic reads, used by the manager for both playlists and Liked Songs.
+    browse: (browseId) => callInnertube("browse", { browseId }),
+    // "2025-style" continuation used when paging a playlist/Liked-Songs track
+    // list: the continuation token replaces browseId in the POST body.
+    browseContinuationBody: (continuation) => callInnertube("browse", { continuation }),
+    // Older-style continuation used when paging the library-playlists grid:
+    // the original body is resent, and the token goes in the URL query string.
+    browseContinuationUrl: (browseId, continuation) =>
+      callInnertube("browse", { browseId }, `&ctoken=${continuation}&continuation=${continuation}`),
+
+    // Playlist mutations (bodies ported from ytmusicapi's mixins/playlists.py).
+    createPlaylist: (title, description, privacyStatus = "PRIVATE") =>
+      callInnertube("playlist/create", { title, description, privacyStatus }),
+    deletePlaylist: (playlistId) => callInnertube("playlist/delete", { playlistId: validatePlaylistId(playlistId) }),
+    addPlaylistItems: (playlistId, videoIds) =>
+      callInnertube("browse/edit_playlist", {
+        playlistId: validatePlaylistId(playlistId),
+        actions: videoIds.map((videoId) => ({ action: "ACTION_ADD_VIDEO", addedVideoId: videoId })),
+      }),
+    // `items`: [{ videoId, setVideoId }] — both required, per ytmusicapi.
+    removePlaylistItems: (playlistId, items) =>
+      callInnertube("browse/edit_playlist", {
+        playlistId: validatePlaylistId(playlistId),
+        actions: items.map((it) => ({
+          setVideoId: it.setVideoId,
+          removedVideoId: it.videoId,
+          action: "ACTION_REMOVE_VIDEO",
+        })),
+      }),
   };
 
   window.addEventListener("message", async (event) => {

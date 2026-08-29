@@ -2,47 +2,60 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>YT Music Manager & Migrator — Phase 0 Auth Check</title>
+  <title>YouTube Music Manager & Migrator</title>
   <link rel="stylesheet" href="index.css" />
 </head>
 <body>
-  <main class="wrap">
-    <h1>YouTube Music auth — Phase 0 smoke test</h1>
-    <p class="lede">
-      This proves the extension can read and write your YouTube Music library
-      using the SAPISIDHASH signing scheme, same-origin from an open
-      <code>music.youtube.com</code> tab. Nothing here is stored or sent
-      anywhere except to YouTube Music itself.
-    </p>
-
-    <section class="card">
-      <h2>1. Tab status</h2>
+  <div id="app">
+    <header>
+      <h1>YouTube Music Manager</h1>
       <p id="tab-status" class="status">Checking…</p>
-      <button id="refresh-tab">Re-check</button>
+      <nav>
+        <button data-view="collections" class="active">Library</button>
+        <button data-view="log">Activity &amp; Undo</button>
+      </nav>
+    </header>
+
+    <section id="view-collections">
+      <div class="toolbar">
+        <button id="refresh-collections">Refresh</button>
+        <span class="hint">Playlists and Liked Songs in your account.</span>
+      </div>
+      <div id="collections-list"></div>
     </section>
 
-    <section class="card">
-      <h2>2. Read Liked Songs</h2>
-      <p class="hint">Calls <code>browse</code> with <code>browseId: "VLLM"</code>.</p>
-      <button id="read-liked">Read Liked Songs</button>
-      <pre id="read-liked-result" class="result"></pre>
+    <section id="view-collection-detail" hidden>
+      <div class="toolbar toolbar-detail">
+        <button id="back-to-collections">&larr; Back</button>
+        <h2 id="detail-title"></h2>
+        <button id="refresh-collection-detail" title="Re-fetch from YouTube Music">↻</button>
+        <input id="filter-input" type="text" placeholder="Filter title / artist / album" />
+        <select id="sort-select">
+          <option value="_fetchIndex">Date added</option>
+          <option value="title">Title</option>
+          <option value="artistsDisplay">Artist</option>
+          <option value="album">Album</option>
+          <option value="duration_seconds">Duration</option>
+        </select>
+        <button id="sort-dir">↓</button>
+      </div>
+      <div class="toolbar toolbar-actions">
+        <span id="selection-count">0 selected</span>
+        <button id="select-all">Select all (filtered)</button>
+        <button id="clear-selection">Clear</button>
+        <button id="action-remove" disabled>Remove</button>
+        <button id="action-unlike" disabled hidden>Un-like</button>
+        <select id="move-target"></select>
+        <button id="action-move" disabled>Move to…</button>
+      </div>
+      <p class="hint">Undo restores membership, not position — a restored track is re-added to the end.</p>
+      <div id="track-list" class="vlist-container"></div>
     </section>
 
-    <section class="card">
-      <h2>3. Like + un-like a test track</h2>
-      <p class="hint">
-        Enter a YouTube Music <code>videoId</code> for a track you're sure is
-        <strong>not already</strong> in your Liked Songs — this temporarily
-        likes it, then removes the like. Default is a well-known public video
-        as a placeholder only; change it if that happens to already be liked
-        on your account.
-      </p>
-      <label for="video-id">videoId</label>
-      <input id="video-id" type="text" value="dQw4w9WgXcQ" />
-      <button id="like-unlike">Like, then un-like</button>
-      <pre id="like-unlike-result" class="result"></pre>
+    <section id="view-log" hidden>
+      <div id="log-list"></div>
     </section>
-  </main>
-  <script src="index.js"></script>
+  </div>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

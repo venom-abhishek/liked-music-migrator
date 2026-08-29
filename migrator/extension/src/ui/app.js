@@ -6,8 +6,10 @@ import { logAction, listActions, performUndo, ACTION_TYPES } from "../storage/lo
 const LIKED_ID = "LM";
 const LIKED_BROWSE_ID = "VLLM";
 
-let ytTab = null;
-let client = null;
+// Stateless — every call re-resolves the YT Music tab fresh, so this is
+// created once and reused for the lifetime of the page. See client.js for
+// why it's stateless rather than bound to a tabId captured at load time.
+const client = makeYtMusicClient();
 
 let collections = []; // { kind: 'liked'|'playlist', id, browseId, title, count }
 let currentCollection = null;
@@ -53,15 +55,15 @@ function setTabStatus(message, isError) {
   tabStatusEl.className = "status " + (isError ? "err" : "ok");
 }
 
+// Purely a status-banner check — actual calls (via `client`) always
+// re-resolve the tab themselves, so nothing here needs to be cached.
 async function ensureTab() {
-  ytTab = await findYtMusicTab();
-  if (!ytTab) {
-    setTabStatus("No open music.youtube.com tab found. Open one, log in, then click Refresh.", true);
-    client = null;
+  const tab = await findYtMusicTab();
+  if (!tab) {
+    setTabStatus("No open music.youtube.com tab found. Open one and log in.", true);
     return false;
   }
-  setTabStatus(`Connected: ${ytTab.url}`, false);
-  client = makeYtMusicClient(ytTab.id);
+  setTabStatus(`Connected: ${tab.url}`, false);
   return true;
 }
 
@@ -429,3 +431,4 @@ el("action-move").addEventListener("click", () => doMove().catch((e) => alert(e.
 el("refresh-collection-detail").addEventListener("click", () => openCollection(currentCollection));
 
 loadCollections();
+setInterval(ensureTab, 4000); // keeps the status banner accurate; actions themselves always re-resolve the tab regardless

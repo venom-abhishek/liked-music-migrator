@@ -12,7 +12,21 @@
   "host_permissions": [
     "https://music.youtube.com/*",
     "https://www.jiosaavn.com/*",
-    "https://*.jiosaavn.com/*"
+    "https://*.jiosaavn.com/*",
+    "https://music.amazon.com/*",
+    "https://music.amazon.in/*",
+    "https://music.amazon.co.uk/*",
+    "https://music.amazon.de/*",
+    "https://music.amazon.fr/*",
+    "https://music.amazon.it/*",
+    "https://music.amazon.es/*",
+    "https://music.amazon.co.jp/*",
+    "https://music.amazon.com.au/*",
+    "https://music.amazon.com.br/*",
+    "https://music.amazon.com.mx/*",
+    "https://music.amazon.ca/*",
+    "https://music.amazon.nl/*",
+    "https://music.amazon.se/*"
   ],
   "content_scripts": [
     {
@@ -30,6 +44,29 @@
       "matches": ["https://www.jiosaavn.com/*", "https://*.jiosaavn.com/*"],
       "js": ["src/sources/jiosaavn.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://music.amazon.com/*", "https://music.amazon.in/*", "https://music.amazon.co.uk/*",
+        "https://music.amazon.de/*", "https://music.amazon.fr/*", "https://music.amazon.it/*",
+        "https://music.amazon.es/*", "https://music.amazon.co.jp/*", "https://music.amazon.com.au/*",
+        "https://music.amazon.com.br/*", "https://music.amazon.com.mx/*", "https://music.amazon.ca/*",
+        "https://music.amazon.nl/*", "https://music.amazon.se/*"
+      ],
+      "js": ["src/sources/amazon-inject.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://music.amazon.com/*", "https://music.amazon.in/*", "https://music.amazon.co.uk/*",
+        "https://music.amazon.de/*", "https://music.amazon.fr/*", "https://music.amazon.it/*",
+        "https://music.amazon.es/*", "https://music.amazon.co.jp/*", "https://music.amazon.com.au/*",
+        "https://music.amazon.com.br/*", "https://music.amazon.com.mx/*", "https://music.amazon.ca/*",
+        "https://music.amazon.nl/*", "https://music.amazon.se/*"
+      ],
+      "js": ["src/sources/amazon-bridge.js"],
+      "run_at": "document_start"
     }
   ]
 }

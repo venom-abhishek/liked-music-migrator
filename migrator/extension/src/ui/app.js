@@ -6,6 +6,8 @@ import { findJioSaavnTab, makeJioSaavnClient } from "../sources/jiosaavnClient.j
 import { getJioSaavnInventory, extractJioSaavnSongs } from "../engine/jiosaavnExtract.js";
 import { matchSong, AUTO, REVIEW, NOT_FOUND } from "../engine/matcher.js";
 import { commitImport } from "../engine/importer.js";
+import { findAmazonTab, makeAmazonClient } from "../sources/amazonClient.js";
+import { autoScrollAndCapture, extractSongsFromCaptures } from "../engine/amazonExtract.js";
 
 const LIKED_ID = "LM";
 const LIKED_BROWSE_ID = "VLLM";
@@ -482,26 +484,8 @@ function setProgress(el, text, state) {
   el.className = state ? `status ${state}` : "status";
 }
 
-async function runPreview() {
-  if (!jiosaavnInventory) return;
-  const selection = getJioSaavnSelection();
-  importPreviewResultsEl.hidden = true;
-  importCommitResultsEl.hidden = true;
+async function matchAndPreview(songs, warnings) {
   previewMatched = [];
-
-  const previewBtn = el("import-preview");
-  previewBtn.disabled = true;
-  setProgress(importProgressEl, "Extracting from JioSaavn…", "busy");
-  let extraction;
-  try {
-    extraction = await extractJioSaavnSongs(jiosaavnClient, selection);
-  } catch (err) {
-    setProgress(importProgressEl, `Extraction failed: ${err.message || err}`, "err");
-    previewBtn.disabled = false;
-    return;
-  }
-
-  const songs = extraction.songs;
   const counts = { [AUTO]: 0, [REVIEW]: 0, [NOT_FOUND]: 0 };
   for (let i = 0; i < songs.length; i++) {
     setProgress(importProgressEl, `Matching ${i + 1}/${songs.length}: ${songs[i].title}`, "busy");
@@ -515,8 +499,7 @@ async function runPreview() {
     previewMatched.push({ song: songs[i], match });
   }
 
-  previewBtn.disabled = false;
-  const warningText = extraction.warnings.length ? ` (${extraction.warnings.join(" | ")})` : "";
+  const warningText = warnings && warnings.length ? ` (${warnings.join(" | ")})` : "";
   setProgress(importProgressEl, `Matching complete.${warningText}`, "ok");
   importSummaryEl.textContent =
     `${songs.length} tracks — ${counts[AUTO]} will auto-import, ${counts[REVIEW]} need review, ${counts[NOT_FOUND]} not found.`;
@@ -537,6 +520,70 @@ async function runPreview() {
     }
   }
   importPreviewResultsEl.hidden = false;
+}
+
+async function runPreview() {
+  if (!jiosaavnInventory) return;
+  const selection = getJioSaavnSelection();
+  importPreviewResultsEl.hidden = true;
+  importCommitResultsEl.hidden = true;
+
+  const previewBtn = el("import-preview");
+  previewBtn.disabled = true;
+  setProgress(importProgressEl, "Extracting from JioSaavn…", "busy");
+  let extraction;
+  try {
+    extraction = await extractJioSaavnSongs(jiosaavnClient, selection);
+  } catch (err) {
+    setProgress(importProgressEl, `Extraction failed: ${err.message || err}`, "err");
+    previewBtn.disabled = false;
+    return;
+  }
+  await matchAndPreview(extraction.songs, extraction.warnings);
+  previewBtn.disabled = false;
+}
+
+// ---- Import (Amazon Music — experimental, response interception) ----
+
+async function runAmazonCapture() {
+  importPreviewResultsEl.hidden = true;
+  importCommitResultsEl.hidden = true;
+
+  const tab = await findAmazonTab();
+  if (!tab) {
+    setProgress(
+      importProgressEl,
+      "No open Amazon Music tab found. Open one, log in, navigate to Library > Songs (or a playlist), then try again.",
+      "err"
+    );
+    return;
+  }
+
+  const captureBtn = el("amazon-capture");
+  captureBtn.disabled = true;
+  const amazonClient = makeAmazonClient(tab.id);
+  try {
+    setProgress(importProgressEl, "Scrolling the Amazon Music tab and capturing its own responses…", "busy");
+    const captures = await autoScrollAndCapture(amazonClient, {
+      onProgress: (text) => setProgress(importProgressEl, text, "busy"),
+    });
+    const collectionName = el("amazon-collection-name").value.trim() || "Amazon Music";
+    const songs = extractSongsFromCaptures(captures, "playlist", collectionName);
+    if (songs.length === 0) {
+      setProgress(
+        importProgressEl,
+        `Captured ${captures.length} response(s) but found 0 parseable tracks. The response shape may differ ` +
+          "from what discovery confirmed — see migrator/PHASE3_AMAZON_DISCOVERY.md for the DOM-scraping fallback option.",
+        "err"
+      );
+      return;
+    }
+    await matchAndPreview(songs);
+  } catch (err) {
+    setProgress(importProgressEl, `Amazon capture failed: ${err.message || err}`, "err");
+  } finally {
+    captureBtn.disabled = false;
+  }
 }
 
 async function runCommit() {
@@ -599,6 +646,7 @@ el("jiosaavn-refresh").addEventListener("click", ensureJioSaavnTab);
 el("jiosaavn-load").addEventListener("click", () => loadJioSaavnLibrary().catch((e) => alert(e.message || e)));
 el("import-preview").addEventListener("click", () => runPreview().catch((e) => alert(e.message || e)));
 el("import-commit").addEventListener("click", () => runCommit().catch((e) => alert(e.message || e)));
+el("amazon-capture").addEventListener("click", () => runAmazonCapture().catch((e) => alert(e.message || e)));
 
 el("refresh-collections").addEventListener("click", loadCollections);
 el("back-to-collections").addEventListener("click", () => showView("collections"));

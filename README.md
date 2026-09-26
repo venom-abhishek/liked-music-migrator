@@ -1,16 +1,17 @@
 # liked-music-migrator
 
 A browser extension for managing your **YouTube Music** library and migrating
-liked songs / playlists into it from other services (currently **JioSaavn**;
-Amazon Music planned) — using your own already-logged-in browser sessions.
+liked songs / playlists into it from other services (**JioSaavn** and
+**Amazon Music**) — using your own already-logged-in browser sessions.
 No servers, no accounts to create, no paid services, and **no AI/LLM calls at
 runtime**: matching is deterministic string+duration logic.
 
-> **Status: Phases 0-2 complete; Amazon Music import in progress.** The
+> **Status: Phases 0-3 complete; Phase 4 (power features) next.** The
 > manager works for YouTube Music (list, sort/filter/select, remove/un-like/
 > move, undo), and both JioSaavn and Amazon Music can be extracted, matched,
 > and imported (Like all / single playlist / mirror playlists), with a
-> preview step before anything is written and undo after. Amazon uses
+> preview step before anything is written and undo after. Amazon import is
+> the least battle-tested part (see [Roadmap](#roadmap)). Amazon uses
 > response interception rather than calling its API directly — see
 > [`migrator/PHASE3_AMAZON_DISCOVERY.md`](migrator/PHASE3_AMAZON_DISCOVERY.md)
 > for why. See [Roadmap](#roadmap) below, or the full implementation
@@ -53,17 +54,20 @@ fee; source-only install is free in the meantime). To install:
   logged into can act on your behalf. It never asks for or stores a
   password, and it never logs the session values it reads.
 - **This is a scraping/automation tool against services that don't offer a
-  public API for this.** It relies on YouTube Music's, JioSaavn's, and (once
-  built) Amazon Music's internal, undocumented endpoints. That is very
+  public API for this.** It relies on YouTube Music's, JioSaavn's, and
+  Amazon Music's internal, undocumented endpoints. That is very
   likely against those platforms' Terms of Service, even though it only ever
   acts as *you*, using *your* session, doing things you could do by hand in
   the UI.
 - **It can break at any time** if a platform changes its internal API shape,
   page structure, or auth mechanism. There is no SLA and no support
   guarantee — this is a personal tool shared as source.
-- **Destructive actions are logged and undoable** (see the spec's action-log
-  design), but undo restores *membership*, not *position* — an undone
-  removal re-adds a track to the end of a playlist, not its original spot.
+- **Destructive actions are logged and undoable** (Activity & Undo tab). Each
+  action is recorded *before* it starts and updated step by step, so even an
+  action that fails halfway can be undone for exactly the part that happened.
+  Undo restores *membership*, not *position* — an undone removal re-adds a
+  track to the end of a playlist, not its original spot — and it never
+  deletes a playlist that has tracks in it that it didn't put there.
 
 ## Roadmap
 
@@ -77,9 +81,25 @@ Phased build order (each phase gates the next):
 3. **Phase 2 — JioSaavn importer.** ✅ Extraction + deterministic matching +
    three import modes (Like all / single playlist / mirrored playlists).
 4. **Phase 3 — Amazon Music source.** ✅ (via response interception, not
-   direct API calls — see `migrator/PHASE3_AMAZON_DISCOVERY.md`.)
+   direct API calls — see `migrator/PHASE3_AMAZON_DISCOVERY.md`.) Verified
+   on a 37-track playlist; paging through a large playlist is implemented
+   but not yet verified live.
 5. **Phase 4 — Power features.** Duplicate finder, artist/album bulk select,
    CSV backup, match-bucket surfacing.
+
+## Development
+
+The extension has no build step — edit files under `migrator/extension/src/`
+and reload it at `chrome://extensions`. Unit tests for the matching,
+parsing, Amazon extraction, importer and undo logic run under Node (22+),
+with no dependencies to install:
+
+```
+cd migrator/extension
+npm test
+```
+
+They also run automatically on every push and pull request (GitHub Actions).
 
 ## License
 

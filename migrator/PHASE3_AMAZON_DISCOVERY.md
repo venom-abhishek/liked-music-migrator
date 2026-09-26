@@ -1,10 +1,55 @@
-# Phase 3 (Amazon Music) — Discovery Notes and Open Blocker
+# Phase 3 (Amazon Music) — Discovery Notes and Resolution
 
 **Date:** 2026-08-30
 **Written by:** Claude Sonnet 5, in the same Claude Code session that built Phases 0–2 of the browser extension (see `migrator/EXTENSION_SPEC.md` and the repo at `github.com/venom-abhishek/liked-music-migrator`).
 **Intended audience:** the project lead who wrote `EXTENSION_SPEC.md` (reviewing this in a Claude Opus 5 session), and the developer who built the original Python JioSaavn extractor (`migrator/extractors/jiosaavn.py`, documented in `PROGRESS_REPORT.md`) — the operator is sharing this same document in both places since each may recognize something the other doesn't.
 
 **Why this exists:** `EXTENSION_SPEC.md` §15 flags Amazon Music as needing a live discovery handoff since its endpoints are undocumented. We did that handoff live with the operator's real, logged-in `music.amazon.in` account. We found the endpoint, the client-side auth mechanism, and the exact request shape a *working* request uses — but a from-scratch reconstruction of that request, matching the working one field-for-field as far as we can observe, still gets rejected by Amazon's backend with a generic, non-diagnostic error. This document is everything confirmed, everything tried, and what to try next, so whoever continues this doesn't start from zero.
+
+> **Status update (2026-09): resolved — by not forging requests at all.** Sections 1–4 below are the
+> original discovery log and are kept as-is, because they explain *why* the final design is what it is. The
+> blocker in §3 was never cracked; the approach was changed instead. Read §0 first.
+
+---
+
+## 0. Resolution: read the page's own responses instead of making our own requests
+
+**Why the §3 approach can't work.** Amazon's Skyfire API validates each call against server-side session
+state that the page builds up through a *preceding sequence* of calls (`elementClicked` →
+`showLibraryPlaylist` → `onInteraction`), not just against the per-request fields in §2.3. A request built
+from scratch, however exact its fields, arrives with no sequence behind it and gets the generic "Service
+error" dialog. This was tried extensively and dropped on the spec author's direction.
+
+**What the extension does instead** (`extension/src/sources/amazon-inject.js`):
+- A MAIN-world content script runs at **`document_start`**, which is before Amazon's bundle initializes and
+  keeps its own private reference to `fetch`/`XMLHttpRequest`. It wraps both. Patching any later has no
+  effect, because the app already holds the original functions. The timing was verified live: real Skyfire
+  calls do get captured.
+- It only reads **response bodies** from `*.skill.music.a2z.com/api/*`. It never reads request
+  bodies/headers, which is where the access token and csrf values live. The extension never makes an Amazon
+  request of its own.
+- Recording is **always on** from page load. It keeps only responses that contain `trackAsin` (the ones
+  that carry track rows), at most 300, each tagged with the page URL (origin + path) it arrived on. The
+  Capture button takes the ones for the page currently open. *(An earlier version only started recording
+  when Capture was clicked. That missed the first batch of tracks, which for a short playlist was all of
+  them. Fixed 2026-09.)*
+- `amazon-bridge.js` (isolated world) auto-scrolls the page until the list stops growing, so the page itself
+  fetches every remaining batch. It scrolls the document if the document scrolls, and otherwise the tallest
+  scrollable inner element, looking inside open shadow roots too.
+- `engine/amazonExtract.js` walks the Skyfire template tree for row items. The field mapping was confirmed
+  against real data: `primaryText` = title; `secondaryText1/2/3` = artist / album / duration; track id is
+  the `trackAsin` query parameter of `primaryLink.deeplink` (not the row's own `id`).
+
+**Operating notes / known limits**
+- Navigate the Amazon tab to the playlist (or Library → Songs), **reload it**, wait for songs to appear,
+  then click Capture. The reload guarantees that the first batch arrives while that page's URL is current.
+  With in-app navigation, Amazon may fetch before it updates the URL.
+- Verified live on a 37-track playlist (single response; extracted fields matched the screen exactly). A
+  playlist large enough to need several continuation fetches has **not** been verified live yet. If a big
+  import comes up short, look first at the scroll loop (`autoScrollAndCapture`) and the scroller detection
+  (`amazon-bridge.js`).
+- Capture works per page. Use the "This is my liked/library songs" checkbox to send a capture to Liked
+  Music in Mirror mode.
 
 ---
 

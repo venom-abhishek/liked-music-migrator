@@ -1,0 +1,9 @@
+{
+  "name": "ytm-manager-migrator-extension",
+  "private": true,
+  "description": "Not published to npm. Exists only so `npm test` runs the unit tests (no dependencies; the extension itself has no build step).",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.js\""
+  }
+}

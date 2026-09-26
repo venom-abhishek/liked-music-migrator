@@ -49,9 +49,22 @@ export function detectVersionTag(title) {
 }
 
 let decodeEl = null;
+const BASIC_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+
 /** html.unescape equivalent: decodes named/numeric HTML entities. */
 export function decodeHtmlEntities(s) {
   if (!s) return s;
+  if (typeof document === "undefined") {
+    // No DOM (unit tests under Node): numeric entities + the common named
+    // ones. In the extension itself the full browser decoder below is used.
+    return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, body) => {
+      if (body[0] === "#") {
+        const code = body[1].toLowerCase() === "x" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+        return Number.isFinite(code) ? String.fromCodePoint(code) : m;
+      }
+      return BASIC_ENTITIES[body.toLowerCase()] ?? m;
+    });
+  }
   if (!decodeEl) decodeEl = document.createElement("textarea");
   decodeEl.innerHTML = s;
   return decodeEl.value;

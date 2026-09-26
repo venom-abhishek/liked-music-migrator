@@ -66,13 +66,6 @@
         <label class="row-check"><input type="checkbox" id="jiosaavn-include-liked" checked /> Liked Songs (<span id="jiosaavn-liked-count">0</span>)</label>
         <div id="jiosaavn-playlist-list"></div>
 
-        <div class="toolbar mode-toolbar">
-          <label><input type="radio" name="import-mode" value="liked" checked /> Like all songs</label>
-          <label><input type="radio" name="import-mode" value="single" /> Single playlist:</label>
-          <input type="text" id="single-playlist-name" value="JioSaavn Import" />
-          <label><input type="radio" name="import-mode" value="mirror" /> Mirror playlists (source name = destination playlist)</label>
-        </div>
-
         <button id="import-preview">Preview matches</button>
       </div>
 
@@ -81,16 +74,20 @@
       <p class="hint">
         Amazon's API can't be called directly from here (see
         <code>migrator/PHASE3_AMAZON_DISCOVERY.md</code>) — instead, open a logged-in Amazon Music
-        tab, navigate to the collection you want (Library &gt; Songs, or a specific playlist), and
-        click Capture: this scrolls that page for you and reads the data Amazon's own page loads,
-        without ever touching your Amazon credentials.
+        tab, navigate to the collection you want (Library &gt; Songs, or a specific playlist),
+        <strong>reload that tab</strong>, wait for the songs to show, and click Capture: this scrolls
+        that page for you and reads the data Amazon's own page loads, without ever touching your
+        Amazon credentials. Only the page currently open in the Amazon tab is imported.
       </p>
       <div class="toolbar">
-        <label>Import mode uses the radio buttons above (Like all / single playlist / mirror). Collection name for this capture:</label>
+        <label>Name for this collection (used as the playlist name in Mirror mode):</label>
       </div>
       <div class="toolbar">
         <input type="text" id="amazon-collection-name" placeholder="e.g. Amazon Liked Songs" value="Amazon Music" />
         <button id="amazon-capture">Capture current Amazon page</button>
+      </div>
+      <div class="toolbar">
+        <label class="row-check"><input type="checkbox" id="amazon-is-liked" /> This is my Amazon liked songs / library songs (in Mirror mode it goes to Liked Music, not a playlist)</label>
       </div>
 
       <p id="import-progress" class="status"></p>
@@ -105,6 +102,14 @@
           <summary>Not found — <span id="notfound-count">0</span></summary>
           <ul id="notfound-list"></ul>
         </details>
+        <p class="hint">Where should the AUTO matches go?</p>
+        <div class="toolbar mode-toolbar">
+          <label><input type="radio" name="import-mode" value="liked" checked /> Like all songs</label>
+          <label><input type="radio" name="import-mode" value="single" /> Single playlist:</label>
+          <input type="text" id="single-playlist-name" placeholder="blank = &quot;JioSaavn Import&quot; / &quot;Amazon Music Import&quot;" />
+          <label><input type="radio" name="import-mode" value="mirror" /> Mirror playlists (source name = destination playlist)</label>
+        </div>
+
         <button id="import-commit">Commit import (AUTO matches only)</button>
       </div>
 

@@ -286,7 +286,10 @@ function parseGridPlaylistItems(rawItems) {
     if (subtitle && subtitle.runs && subtitle.runs.length === 3) {
       const countText = nav(data, SUBTITLE2, true) || "";
       if (/\d+ /.test(countText)) {
-        const n = parseInt(countText.split(" ")[0], 10);
+        // "1,234 songs" — strip thousands separators (",", ".", narrow
+        // spaces, depending on locale) before parsing; ytmusicapi's to_int
+        // does the same. A plain parseInt would read "1,234" as 1.
+        const n = parseInt(countText.split(" ")[0].replace(/\D/g, ""), 10);
         playlist.count = Number.isNaN(n) ? null : n;
       }
     }

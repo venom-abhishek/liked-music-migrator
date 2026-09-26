@@ -1,5 +1,7 @@
 // UI-page-side wrapper for talking to sources/amazon-bridge.js.
 
+import { mostRecentTab } from "../ytmusic/client.js";
+
 const UI_REQUEST_SOURCE = "amzn-ext-ui-request";
 
 export class AmazonNotFoundError extends Error {}
@@ -9,7 +11,7 @@ const AMAZON_URL_PATTERN = /^https:\/\/music\.amazon\.[a-z.]+\//i;
 
 export async function findAmazonTab() {
   const tabs = await chrome.tabs.query({});
-  return tabs.find((t) => t.url && AMAZON_URL_PATTERN.test(t.url)) || null;
+  return mostRecentTab(tabs.filter((t) => t.url && AMAZON_URL_PATTERN.test(t.url)));
 }
 
 async function call(tabId, action, args) {
@@ -28,9 +30,8 @@ async function call(tabId, action, args) {
 export function makeAmazonClient(tabId) {
   if (!tabId) throw new AmazonNotFoundError("No open Amazon Music tab.");
   return {
-    startCapture: () => call(tabId, "startCapture"),
-    stopCapture: () => call(tabId, "stopCapture"),
-    getCaptures: () => call(tabId, "getCaptures").then((r) => r.captures || []),
+    getCaptures: (opts) => call(tabId, "getCaptures", [opts || {}]).then((r) => r.captures || []),
+    countCaptures: () => call(tabId, "countCaptures").then((r) => r.count || 0),
     clearCaptures: () => call(tabId, "clearCaptures"),
     scrollStep: (pxPerStep, waitMs) => call(tabId, "scrollStep", [pxPerStep, waitMs]),
     getPageInfo: () => call(tabId, "getPageInfo"),

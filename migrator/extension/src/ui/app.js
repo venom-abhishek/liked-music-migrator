@@ -1,7 +1,7 @@
 import { findYtMusicTab, makeYtMusicClient } from "../ytmusic/client.js";
 import { fetchAllTracks, fetchAllLibraryPlaylists, CollectionState } from "../engine/reconcile.js";
 import { parsePlaylistHeaderMeta, playlistIdToBrowseId } from "../ytmusic/parsers.js";
-import { logAction, listActions, performUndo, ACTION_TYPES } from "../storage/log.js";
+import { startAction, saveAction, finishAction, listActions, performUndo, hasUndoableEffect, ACTION_TYPES, STATUS } from "../storage/log.js";
 import { findJioSaavnTab, makeJioSaavnClient } from "../sources/jiosaavnClient.js";
 import { getJioSaavnInventory, extractJioSaavnSongs } from "../engine/jiosaavnExtract.js";
 import { matchSong, AUTO, REVIEW, NOT_FOUND } from "../engine/matcher.js";
@@ -213,7 +213,7 @@ function renderRow(track, _index) {
       <div class="track-artist">${escapeHtml(track.artistsDisplay)}</div>
     </div>
     <div class="track-album">${escapeHtml(track.album || "")}</div>
-    <div class="track-duration">${track.duration || ""}</div>
+    <div class="track-duration">${escapeHtml(track.duration || "")}</div>
   `;
   row.querySelector(".track-check").addEventListener("change", (e) => {
     if (e.target.checked) selection.add(key);
@@ -224,7 +224,14 @@ function renderRow(track, _index) {
 }
 
 function updateSelectionUI() {
-  selectionCountEl.textContent = `${selection.size} selected`;
+  // Selection survives filtering, so selected rows can be off-screen. Say so:
+  // a destructive action applies to every selected track, visible or not.
+  const visibleKeys = new Set(visibleTracks.map(rowKey));
+  let hidden = 0;
+  for (const k of selection) if (!visibleKeys.has(k)) hidden++;
+  selectionCountEl.textContent = hidden
+    ? `${selection.size} selected (${hidden} hidden by the filter)`
+    : `${selection.size} selected`;
   const isLiked = currentCollection && currentCollection.kind === "liked";
   el("action-remove").hidden = isLiked;
   el("action-unlike").hidden = !isLiked;
@@ -246,6 +253,10 @@ function selectedTracks() {
 }
 
 // ---- Destructive actions ----
+//
+// Each one writes its action-log record BEFORE the first API call and flags
+// each track's step as it succeeds (see storage/log.js), so a failure or a
+// closed tab partway through still leaves an accurate, undoable record.
 
 async function doRemove() {
   const tracks = selectedTracks();
@@ -253,15 +264,21 @@ async function doRemove() {
   if (!confirm(`Remove ${tracks.length} track(s) from "${currentCollection.title}"?`)) return;
 
   const items = tracks.map((t) => ({ videoId: t.videoId, setVideoId: t.setVideoId }));
-  await client.removePlaylistItems(currentCollection.id, items);
-  collectionState.applyLocalRemove(items.map((i) => i.setVideoId));
-
-  await logAction(
+  const record = await startAction(
     ACTION_TYPES.REMOVE,
     { kind: currentCollection.kind, id: currentCollection.id, title: currentCollection.title },
     null,
-    tracks.map(toLogTrack)
+    tracks.map((t) => ({ ...toLogTrack(t), removed: false }))
   );
+  try {
+    await client.removePlaylistItems(currentCollection.id, items);
+  } catch (err) {
+    await finishAction(record, err);
+    throw err;
+  }
+  record.tracks.forEach((t) => (t.removed = true));
+  await finishAction(record);
+  collectionState.applyLocalRemove(items.map((i) => i.setVideoId));
 
   selection.clear();
   renderTrackList();
@@ -272,81 +289,137 @@ async function doUnlike() {
   if (tracks.length === 0) return;
   if (!confirm(`Un-like ${tracks.length} track(s)?`)) return;
 
-  for (const t of tracks) {
-    await client.removeLikeSong(t.videoId);
-    await sleep(150);
-  }
-  collectionState.applyLocalUnlike(tracks.map((t) => t.videoId));
-
-  await logAction(
+  const record = await startAction(
     ACTION_TYPES.UNLIKE,
     { kind: "liked", id: LIKED_ID, title: "Liked Music" },
     null,
-    tracks.map(toLogTrack)
+    tracks.map((t) => ({ ...toLogTrack(t), unliked: false }))
   );
-
-  selection.clear();
-  renderTrackList();
+  const done = [];
+  try {
+    for (let i = 0; i < tracks.length; i++) {
+      await client.removeLikeSong(tracks[i].videoId);
+      record.tracks[i].unliked = true;
+      done.push(tracks[i].videoId);
+      await saveAction(record);
+      await sleep(150);
+    }
+    await finishAction(record);
+  } catch (err) {
+    await finishAction(record, err);
+    throw new Error(`Un-liked ${done.length} of ${tracks.length} before an error: ${err.message || err}. Those ${done.length} are in Activity & Undo.`);
+  } finally {
+    collectionState.applyLocalUnlike(done);
+    selection.clear();
+    renderTrackList();
+  }
 }
 
 async function doMove() {
   const tracks = selectedTracks();
   if (tracks.length === 0) return;
   const targetValue = moveTargetSelect.value;
+  if (!targetValue) return;
 
+  // Work out the destination, and ask, BEFORE creating anything.
   let destination;
+  let newPlaylistName = null;
   if (targetValue === "new") {
-    const name = prompt("New playlist name:");
-    if (!name) return;
-    const playlistId = await client.createPlaylist(name, "Created by YT Music Manager & Migrator");
-    destination = { kind: "playlist", id: playlistId, title: name };
-    collections.push({ kind: "playlist", id: playlistId, browseId: playlistIdToBrowseId(playlistId), title: name, count: 0 });
-    await logAction(ACTION_TYPES.PLAYLIST_CREATE, null, destination, [], { createdPlaylistId: playlistId });
+    newPlaylistName = prompt("New playlist name:");
+    if (!newPlaylistName) return;
+    destination = { kind: "playlist", id: null, title: newPlaylistName };
   } else {
     const [kind, id] = targetValue.split(/:(.+)/);
     const c = collections.find((x) => x.kind === kind && x.id === id);
     destination = { kind: c.kind, id: c.id, title: c.title };
   }
-
   if (!confirm(`Move ${tracks.length} track(s) to "${destination.title}"?`)) return;
 
-  const videoIds = tracks.map((t) => t.videoId);
-  let destSetVideoIds = {};
-  if (destination.kind === "liked") {
-    for (const videoId of videoIds) {
-      await client.likeSong(videoId);
-      await sleep(150);
-    }
-  } else {
-    const addResp = await client.addPlaylistItems(destination.id, videoIds);
-    const results = (addResp && addResp.playlistEditResults) || [];
-    for (const r of results) {
-      const data = r && r.playlistEditVideoAddedResultData;
-      if (data && data.videoId && data.setVideoId) destSetVideoIds[data.videoId] = data.setVideoId;
-    }
+  // What's already in the destination: those tracks are only removed from
+  // the source, not added again (YT Music refuses a playlist add that would
+  // duplicate a track, and re-liking an already-liked song would make undo
+  // wrongly un-like it).
+  let alreadyInDest = new Set();
+  if (destination.id) {
+    const browseId = destination.kind === "liked" ? LIKED_BROWSE_ID : playlistIdToBrowseId(destination.id);
+    alreadyInDest = new Set((await fetchAllTracks(client, browseId)).map((t) => t.videoId));
   }
 
-  if (currentCollection.kind === "liked") {
-    for (const videoId of videoIds) {
-      await client.removeLikeSong(videoId);
-      await sleep(150);
-    }
-    collectionState.applyLocalUnlike(videoIds);
-  } else {
-    const items = tracks.map((t) => ({ videoId: t.videoId, setVideoId: t.setVideoId }));
-    await client.removePlaylistItems(currentCollection.id, items);
-    collectionState.applyLocalRemove(items.map((i) => i.setVideoId));
-  }
-
-  await logAction(
+  const record = await startAction(
     ACTION_TYPES.MOVE,
     { kind: currentCollection.kind, id: currentCollection.id, title: currentCollection.title },
     destination,
-    tracks.map((t) => ({ ...toLogTrack(t), destSetVideoId: destSetVideoIds[t.videoId] || null }))
+    tracks.map((t) => ({ ...toLogTrack(t), addedToDest: false, destSetVideoId: null, removedFromSource: false }))
   );
 
-  selection.clear();
-  renderTrackList();
+  const removedKeys = [];
+  try {
+    if (newPlaylistName) {
+      const playlistId = await client.createPlaylist(newPlaylistName, "Created by YT Music Manager & Migrator");
+      destination.id = playlistId;
+      record.createdPlaylistId = playlistId;
+      await saveAction(record);
+      collections.push({ kind: "playlist", id: playlistId, browseId: playlistIdToBrowseId(playlistId), title: newPlaylistName, count: 0 });
+      renderCollectionsList();
+    }
+
+    // 1. Add to destination (skipping what's already there; a song selected
+    //    twice, as two copies in a playlist, is only added once).
+    const toAddIdx = [];
+    const queued = new Set();
+    tracks.forEach((t, i) => {
+      if (alreadyInDest.has(t.videoId) || queued.has(t.videoId)) return;
+      queued.add(t.videoId);
+      toAddIdx.push(i);
+    });
+    if (destination.kind === "liked") {
+      for (const i of toAddIdx) {
+        await client.likeSong(tracks[i].videoId);
+        record.tracks[i].addedToDest = true;
+        await saveAction(record);
+        await sleep(150);
+      }
+    } else if (toAddIdx.length) {
+      const addResp = await client.addPlaylistItems(destination.id, toAddIdx.map((i) => tracks[i].videoId));
+      const destSetVideoIds = {};
+      for (const r of (addResp && addResp.playlistEditResults) || []) {
+        const data = r && r.playlistEditVideoAddedResultData;
+        if (data && data.videoId && data.setVideoId) destSetVideoIds[data.videoId] = data.setVideoId;
+      }
+      for (const i of toAddIdx) {
+        record.tracks[i].addedToDest = true;
+        record.tracks[i].destSetVideoId = destSetVideoIds[tracks[i].videoId] || null;
+      }
+      await saveAction(record);
+    }
+
+    // 2. Only then remove from source — if step 1 failed we never get here,
+    //    so a failure can leave a track in both places, never in neither.
+    if (currentCollection.kind === "liked") {
+      for (let i = 0; i < tracks.length; i++) {
+        await client.removeLikeSong(tracks[i].videoId);
+        record.tracks[i].removedFromSource = true;
+        removedKeys.push(tracks[i].videoId);
+        await saveAction(record);
+        await sleep(150);
+      }
+    } else {
+      const items = tracks.map((t) => ({ videoId: t.videoId, setVideoId: t.setVideoId }));
+      await client.removePlaylistItems(currentCollection.id, items);
+      record.tracks.forEach((t) => (t.removedFromSource = true));
+      removedKeys.push(...items.map((i) => i.setVideoId));
+    }
+    await finishAction(record);
+  } catch (err) {
+    await finishAction(record, err);
+    throw new Error(`Move stopped partway: ${err.message || err}. What did happen is recorded in Activity & Undo.`);
+  } finally {
+    if (currentCollection.kind === "liked") collectionState.applyLocalUnlike(removedKeys);
+    else collectionState.applyLocalRemove(removedKeys);
+    selection.clear();
+    setupMoveTargets();
+    renderTrackList();
+  }
 }
 
 function toLogTrack(t) {
@@ -366,22 +439,32 @@ async function renderLogView() {
     logListEl.textContent = "No actions logged yet.";
     return;
   }
+  const caveat = document.createElement("p");
+  caveat.className = "hint";
+  caveat.textContent =
+    "Undo restores membership, not position — a restored track is re-added to the end of its playlist. " +
+    "Undo newer actions before older ones that touch the same playlist.";
+  logListEl.appendChild(caveat);
+
   for (const action of actions) {
     const row = document.createElement("div");
     row.className = "log-row";
     const label = describeAction(action);
+    const undoable = !action.undone && hasUndoableEffect(action);
+    const buttonText = action.undone ? "Undone" : undoable ? "Undo" : "Nothing to undo";
     row.innerHTML = `
       <div class="log-main">
         <div class="log-label">${escapeHtml(label)}</div>
-        <div class="log-meta">${new Date(action.timestamp).toLocaleString()} · ${action.tracks.length} track(s)</div>
+        <div class="log-meta">${escapeHtml(new Date(action.timestamp).toLocaleString())} · ${escapeHtml(describeProgress(action))}</div>
       </div>
-      <button class="log-undo" ${action.undone ? "disabled" : ""}>${action.undone ? "Undone" : "Undo"}</button>
+      <button class="log-undo" ${undoable ? "" : "disabled"}>${buttonText}</button>
     `;
     row.querySelector(".log-undo").addEventListener("click", async (e) => {
       e.target.disabled = true;
       e.target.textContent = "Undoing…";
       try {
-        await performUndo(client, action);
+        const { notes } = await performUndo(client, action);
+        if (notes && notes.length) alert(notes.join("\n"));
         renderLogView();
       } catch (err) {
         alert(`Undo failed: ${err.message || err}`);
@@ -393,6 +476,21 @@ async function renderLogView() {
   }
 }
 
+// "12 track(s)", plus what actually happened if the action didn't finish.
+function describeProgress(action) {
+  const n = action.tracks.length;
+  if (!action.status || action.status === STATUS.COMPLETE) return `${n} track(s)`;
+  const flag = {
+    [ACTION_TYPES.REMOVE]: "removed",
+    [ACTION_TYPES.UNLIKE]: "unliked",
+    [ACTION_TYPES.MOVE]: "removedFromSource",
+    [ACTION_TYPES.IMPORT]: "added",
+  }[action.type];
+  const done = flag ? action.tracks.filter((t) => t[flag]).length : 0;
+  const why = action.status === STATUS.IN_PROGRESS ? "interrupted" : "stopped by an error";
+  return `${why} — ${done} of ${n} track(s) done${action.error ? ` (${action.error})` : ""}`;
+}
+
 function describeAction(action) {
   switch (action.type) {
     case ACTION_TYPES.REMOVE:
@@ -400,11 +498,14 @@ function describeAction(action) {
     case ACTION_TYPES.UNLIKE:
       return `Un-liked ${action.tracks.length} track(s)`;
     case ACTION_TYPES.MOVE:
-      return `Moved ${action.tracks.length} from "${action.source.title}" to "${action.destination.title}"`;
+      return `Moved ${action.tracks.length} from "${action.source.title}" to ${action.createdPlaylistId ? "new playlist " : ""}"${action.destination.title}"`;
     case ACTION_TYPES.PLAYLIST_CREATE:
       return `Created playlist "${action.destination.title}"`;
-    case ACTION_TYPES.IMPORT:
-      return `Imported ${action.tracks.length} from JioSaavn into "${action.destination.title}"`;
+    case ACTION_TYPES.IMPORT: {
+      // Older records all said "JioSaavn import" as their source title.
+      const from = ((action.source && action.source.title) || "import").replace(/ import$/, "");
+      return `Imported ${action.tracks.length} from ${from} into ${action.createdPlaylistId ? "new playlist " : ""}"${action.destination.title}"`;
+    }
     default:
       return action.type;
   }
@@ -427,6 +528,13 @@ const importCommitResultsEl = el("import-commit-results");
 
 let jiosaavnInventory = null;
 let previewMatched = []; // [{ song, match }] — every decision, not just AUTO
+let previewSource = null; // { kind, title } of whatever produced previewMatched — for the action log
+
+// Match outcome for a track whose search itself failed (network error, rate
+// limit, logged out) — kept apart from NOT_FOUND so a burst of errors can't
+// masquerade as "these songs aren't on YouTube Music".
+const MATCH_ERROR = "ERROR";
+const SEARCH_GAP_MS = 120; // spacing between searches, to stay clear of rate limiting
 
 async function ensureJioSaavnTab() {
   const tab = await findJioSaavnTab();
@@ -448,12 +556,20 @@ async function loadJioSaavnLibrary() {
     jiosaavnInventory = await getJioSaavnInventory(jiosaavnClient);
     jiosaavnLikedCountEl.textContent = String(jiosaavnInventory.liked.count);
     jiosaavnPlaylistListEl.innerHTML = "";
-    for (const p of jiosaavnInventory.playlists) {
+    // Checkboxes are tied to the playlist's position in the inventory, not
+    // its name: names can repeat, and a name containing a quote mark broke
+    // the old name-in-an-attribute approach (that playlist silently dropped
+    // out of the import).
+    jiosaavnInventory.playlists.forEach((p, index) => {
       const label = document.createElement("label");
       label.className = "row-check";
-      label.innerHTML = `<input type="checkbox" checked data-playlist="${escapeHtml(p.name)}" /> ${escapeHtml(p.name)} (${p.count})`;
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = true;
+      box.dataset.playlistIndex = String(index);
+      label.append(box, ` ${p.name} (${p.count})`);
       jiosaavnPlaylistListEl.appendChild(label);
-    }
+    });
     jiosaavnInventoryEl.hidden = false;
   } catch (err) {
     jiosaavnStatusEl.textContent = `Failed to load: ${err.message || err}`;
@@ -466,12 +582,12 @@ async function loadJioSaavnLibrary() {
 
 function getJioSaavnSelection() {
   const includeLiked = el("jiosaavn-include-liked").checked;
-  const checkedNames = new Set(
-    [...jiosaavnPlaylistListEl.querySelectorAll("input[data-playlist]:checked")].map((i) => i.dataset.playlist)
+  const checked = new Set(
+    [...jiosaavnPlaylistListEl.querySelectorAll("input[data-playlist-index]:checked")].map((i) => Number(i.dataset.playlistIndex))
   );
   return {
     liked: includeLiked ? jiosaavnInventory.liked : null,
-    playlists: jiosaavnInventory.playlists.filter((p) => checkedNames.has(p.name)),
+    playlists: jiosaavnInventory.playlists.filter((_p, index) => checked.has(index)),
   };
 }
 
@@ -484,27 +600,42 @@ function setProgress(el, text, state) {
   el.className = state ? `status ${state}` : "status";
 }
 
-async function matchAndPreview(songs, warnings) {
+async function searchAndMatch(song) {
+  // One retry after a pause: a single failed search is usually a transient
+  // network blip or a brief rate limit, not a real answer.
+  try {
+    return await matchSong(song, client);
+  } catch (_first) {
+    await sleep(2000);
+    try {
+      return await matchSong(song, client);
+    } catch (err) {
+      return { decision: MATCH_ERROR, reason: String(err.message || err) };
+    }
+  }
+}
+
+async function matchAndPreview(songs, warnings, source) {
   previewMatched = [];
-  const counts = { [AUTO]: 0, [REVIEW]: 0, [NOT_FOUND]: 0 };
+  previewSource = source;
+  const counts = { [AUTO]: 0, [REVIEW]: 0, [NOT_FOUND]: 0, [MATCH_ERROR]: 0 };
   for (let i = 0; i < songs.length; i++) {
     setProgress(importProgressEl, `Matching ${i + 1}/${songs.length}: ${songs[i].title}`, "busy");
-    let match;
-    try {
-      match = await matchSong(songs[i], client);
-    } catch (err) {
-      match = { decision: NOT_FOUND, reason: String(err.message || err) };
-    }
+    const match = await searchAndMatch(songs[i]);
     counts[match.decision] = (counts[match.decision] || 0) + 1;
     previewMatched.push({ song: songs[i], match });
+    await sleep(SEARCH_GAP_MS);
   }
 
   const warningText = warnings && warnings.length ? ` (${warnings.join(" | ")})` : "";
-  setProgress(importProgressEl, `Matching complete.${warningText}`, "ok");
+  setProgress(importProgressEl, `Matching complete.${warningText}`, counts[MATCH_ERROR] ? "err" : "ok");
   importSummaryEl.textContent =
-    `${songs.length} tracks — ${counts[AUTO]} will auto-import, ${counts[REVIEW]} need review, ${counts[NOT_FOUND]} not found.`;
+    `${songs.length} tracks — ${counts[AUTO]} will auto-import, ${counts[REVIEW]} need review, ${counts[NOT_FOUND]} not found` +
+    (counts[MATCH_ERROR]
+      ? `, ${counts[MATCH_ERROR]} couldn't be searched (errors — run Preview again later to retry them).`
+      : ".");
   reviewCountEl.textContent = String(counts[REVIEW]);
-  notfoundCountEl.textContent = String(counts[NOT_FOUND]);
+  notfoundCountEl.textContent = String(counts[NOT_FOUND] + counts[MATCH_ERROR]);
   reviewListEl.innerHTML = "";
   notfoundListEl.innerHTML = "";
   for (const { song, match } of previewMatched) {
@@ -516,6 +647,10 @@ async function matchAndPreview(songs, warnings) {
     } else if (match.decision === NOT_FOUND) {
       const li = document.createElement("li");
       li.textContent = `${song.title} — ${song.artists}`;
+      notfoundListEl.appendChild(li);
+    } else if (match.decision === MATCH_ERROR) {
+      const li = document.createElement("li");
+      li.textContent = `${song.title} — ${song.artists}  (search failed: ${match.reason})`;
       notfoundListEl.appendChild(li);
     }
   }
@@ -539,7 +674,7 @@ async function runPreview() {
     previewBtn.disabled = false;
     return;
   }
-  await matchAndPreview(extraction.songs, extraction.warnings);
+  await matchAndPreview(extraction.songs, extraction.warnings, { kind: "jiosaavn", title: "JioSaavn" });
   previewBtn.disabled = false;
 }
 
@@ -563,22 +698,28 @@ async function runAmazonCapture() {
   captureBtn.disabled = true;
   const amazonClient = makeAmazonClient(tab.id);
   try {
-    setProgress(importProgressEl, "Scrolling the Amazon Music tab and capturing its own responses…", "busy");
+    setProgress(importProgressEl, "Scrolling the Amazon Music tab and reading what its own page loads…", "busy");
     const captures = await autoScrollAndCapture(amazonClient, {
       onProgress: (text) => setProgress(importProgressEl, text, "busy"),
     });
     const collectionName = el("amazon-collection-name").value.trim() || "Amazon Music";
-    const songs = extractSongsFromCaptures(captures, "playlist", collectionName);
+    const collectionType = el("amazon-is-liked").checked ? "liked" : "playlist";
+    const songs = extractSongsFromCaptures(captures, collectionType, collectionName);
     if (songs.length === 0) {
       setProgress(
         importProgressEl,
-        `Captured ${captures.length} response(s) but found 0 parseable tracks. The response shape may differ ` +
-          "from what discovery confirmed — see migrator/PHASE3_AMAZON_DISCOVERY.md for the DOM-scraping fallback option.",
+        captures.length === 0
+          ? "Found no track data for the page open in the Amazon tab. Make sure that tab is showing the playlist " +
+              "or song list you want, then RELOAD the Amazon tab (so its first batch of songs is read too), wait for " +
+              "the songs to appear, and click Capture again."
+          : `Read ${captures.length} response(s) from the Amazon tab but found no tracks in them. Amazon may have ` +
+              "changed its page format — see migrator/PHASE3_AMAZON_DISCOVERY.md.",
         "err"
       );
       return;
     }
-    await matchAndPreview(songs);
+    setProgress(importProgressEl, `Found ${songs.length} track(s) on the Amazon page. Matching…`, "busy");
+    await matchAndPreview(songs, null, { kind: "amazon", title: "Amazon Music" });
   } catch (err) {
     setProgress(importProgressEl, `Amazon capture failed: ${err.message || err}`, "err");
   } finally {
@@ -594,7 +735,8 @@ async function runCommit() {
     return;
   }
   const mode = getImportMode();
-  const singlePlaylistName = el("single-playlist-name").value.trim() || "JioSaavn Import";
+  const sourceTitle = (previewSource && previewSource.title) || "Imported";
+  const singlePlaylistName = el("single-playlist-name").value.trim() || `${sourceTitle} Import`;
   if (!confirm(`Write ${autoMatched.length} AUTO-matched track(s) to YouTube Music now?`)) return;
 
   const commitBtn = el("import-commit");
@@ -607,9 +749,15 @@ async function runCommit() {
     const likedTracks = await fetchAllTracks(client, LIKED_BROWSE_ID);
     const playlists = (await fetchAllLibraryPlaylists(client)).map((p) => ({ id: p.playlistId, title: p.title }));
 
-    const results = await commitImport(client, autoMatched, mode, singlePlaylistName, { likedTracks, playlists }, (text) => {
-      setProgress(importCommitResultsEl, text, "busy");
-    });
+    const results = await commitImport(
+      client,
+      autoMatched,
+      mode,
+      singlePlaylistName,
+      { likedTracks, playlists },
+      (text) => setProgress(importCommitResultsEl, text, "busy"),
+      previewSource
+    );
 
     const summary = { added: 0, already_present: 0, duplicate: 0, error: 0 };
     for (const r of results) summary[r.outcome] = (summary[r.outcome] || 0) + 1;
@@ -622,8 +770,8 @@ async function runCommit() {
   } catch (err) {
     setProgress(
       importCommitResultsEl,
-      `Commit failed partway through: ${err.message || err}. Check Activity & Undo for whatever ` +
-        "did get written before the failure (if anything) — re-running import will skip it as already present.",
+      `Commit failed partway through: ${err.message || err}. Whatever did get written before the failure is ` +
+        "recorded in Activity & Undo — re-running the import will skip it as already present.",
       "err"
     );
   } finally {

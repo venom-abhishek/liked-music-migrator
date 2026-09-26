@@ -15,9 +15,15 @@ const UI_REQUEST_SOURCE = "ytm-ext-ui-request";
 export class YtMusicNotFoundError extends Error {}
 export class YtMusicCallError extends Error {}
 
+/** Of several matching tabs, the one the user touched most recently (tabs[0] is arbitrary). */
+export function mostRecentTab(tabs) {
+  if (!tabs || tabs.length === 0) return null;
+  return tabs.reduce((best, t) => ((t.lastAccessed || 0) > (best.lastAccessed || 0) ? t : best));
+}
+
 export async function findYtMusicTab() {
   const tabs = await chrome.tabs.query({ url: "https://music.youtube.com/*" });
-  return tabs[0] || null;
+  return mostRecentTab(tabs);
 }
 
 async function call(action, args = []) {
@@ -50,6 +56,20 @@ async function call(action, args = []) {
   return data;
 }
 
+// browse/edit_playlist answers HTTP 200 even when it refused the edit (e.g.
+// adding a song that's already in the playlist makes it return a "this is
+// already in your playlist" dialog instead of adding anything). The real
+// outcome is in the body's `status` — ytmusicapi checks for "SUCCEEDED" in
+// it the same way. Treat anything else as a failure rather than reporting
+// (and logging) an edit that never happened.
+function assertEditSucceeded(data, what) {
+  const status = data && data.status;
+  if (status && !String(status).includes("SUCCEEDED")) {
+    throw new YtMusicCallError(`YouTube Music refused to ${what} (status: ${status}).`);
+  }
+  return data;
+}
+
 /** Thin, typed façade over inject.js's ACTIONS. Stateless — safe to create once and reuse. */
 export function makeYtMusicClient() {
   return {
@@ -63,12 +83,17 @@ export function makeYtMusicClient() {
     // params, etc.) with the new id at .playlistId — every caller wants just
     // the id (this bit ytmusicapi's own create_playlist() unwraps the same
     // way), so unwrap it here rather than in every call site.
-    createPlaylist: async (title, description, privacyStatus) => {
+    // privacyStatus defaults to PRIVATE here, not only in inject.js: an
+    // omitted argument crosses chrome.tabs.sendMessage as null, which
+    // bypasses inject.js's default and sent `privacyStatus: null`.
+    createPlaylist: async (title, description, privacyStatus = "PRIVATE") => {
       const data = await call("createPlaylist", [title, description, privacyStatus]);
       return (data && data.playlistId) || data;
     },
     deletePlaylist: (playlistId) => call("deletePlaylist", [playlistId]),
-    addPlaylistItems: (playlistId, videoIds) => call("addPlaylistItems", [playlistId, videoIds]),
-    removePlaylistItems: (playlistId, items) => call("removePlaylistItems", [playlistId, items]),
+    addPlaylistItems: async (playlistId, videoIds) =>
+      assertEditSucceeded(await call("addPlaylistItems", [playlistId, videoIds]), "add the track(s) to the playlist"),
+    removePlaylistItems: async (playlistId, items) =>
+      assertEditSucceeded(await call("removePlaylistItems", [playlistId, items]), "remove the track(s) from the playlist"),
   };
 }

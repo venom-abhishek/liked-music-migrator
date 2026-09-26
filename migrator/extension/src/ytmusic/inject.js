@@ -61,16 +61,28 @@
     // this one Authorization header.
     const hashValue = await computeSapisidHash(sapisid, ORIGIN);
 
+    const headers = {
+      Authorization: `SAPISIDHASH ${hashValue}`,
+      "X-Origin": ORIGIN,
+      "X-Goog-Visitor-Id": visitorData || "",
+      "Content-Type": "application/json",
+    };
+    // Which signed-in Google account (and, for brand accounts, which
+    // channel) this tab is using. Without these, a browser signed into
+    // several Google accounts would have every call act on the FIRST
+    // account, whichever one this tab is showing. Both values are read from
+    // the page's own ytcfg, the same place YT Music's web client gets them.
+    // Neither is a secret.
+    const sessionIndex = window.ytcfg.get("SESSION_INDEX");
+    if (sessionIndex != null && sessionIndex !== "") headers["X-Goog-AuthUser"] = String(sessionIndex);
+    const delegatedSessionId = window.ytcfg.get("DELEGATED_SESSION_ID");
+    if (delegatedSessionId) headers["X-Goog-PageId"] = String(delegatedSessionId);
+
     const url = `${ORIGIN}/youtubei/v1/${endpoint}?alt=json&key=${encodeURIComponent(apiKey)}${urlExtraParams}`;
     const resp = await fetch(url, {
       method: "POST",
       credentials: "include",
-      headers: {
-        Authorization: `SAPISIDHASH ${hashValue}`,
-        "X-Origin": ORIGIN,
-        "X-Goog-Visitor-Id": visitorData || "",
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify({ context, ...extraBody }),
     });
 
@@ -107,8 +119,8 @@
       callInnertube("browse", { browseId }, `&ctoken=${continuation}&continuation=${continuation}`),
 
     // Playlist mutations (bodies ported from ytmusicapi's mixins/playlists.py).
-    createPlaylist: (title, description, privacyStatus = "PRIVATE") =>
-      callInnertube("playlist/create", { title, description, privacyStatus }),
+    createPlaylist: (title, description, privacyStatus) =>
+      callInnertube("playlist/create", { title, description, privacyStatus: privacyStatus || "PRIVATE" }),
     deletePlaylist: (playlistId) => callInnertube("playlist/delete", { playlistId: validatePlaylistId(playlistId) }),
     addPlaylistItems: (playlistId, videoIds) =>
       callInnertube("browse/edit_playlist", {

@@ -47,14 +47,16 @@ function toLogTrack(c) {
  * turned out to be redundant dead weight in practice — see PROGRESS_REPORT
  * §2.3 — live-state comparison is what actually did the work).
  * `sourceMeta`: { kind, title } for the action log, e.g. { kind: "amazon", title: "Amazon Music" }.
- * Reports progress per destination group via `onProgress(text)`.
+ * Reports progress per destination group via `onProgress(text)`, and hands
+ * each action-log record to `onRecord(record)` as it's created (the UI uses
+ * these for its "Undo this import" button).
  *
  * Logging is write-ahead (see storage/log.js): each destination's action
  * record exists before its first write, and each track is flagged `added`
  * as soon as its write succeeds — so a failure partway leaves an accurate,
  * undoable record of exactly what did get written.
  */
-export async function commitImport(client, matched, mode, singlePlaylistName, existingLibrary, onProgress, sourceMeta) {
+export async function commitImport(client, matched, mode, singlePlaylistName, existingLibrary, onProgress, sourceMeta, onRecord) {
   const source = {
     kind: (sourceMeta && sourceMeta.kind) || "import",
     id: "import",
@@ -82,6 +84,7 @@ export async function commitImport(client, matched, mode, singlePlaylistName, ex
       const toAdd = dedupeAgainstAndWithinRun(candidates, likedVideoIds, likedKeys, results);
       if (toAdd.length === 0) continue;
       const record = await startAction(ACTION_TYPES.IMPORT, source, { kind: "liked", id: "LM", title: "Liked Music" }, toAdd.map(toLogTrack));
+      onRecord?.(record);
       let firstError = null;
       for (let i = 0; i < toAdd.length; i++) {
         const c = toAdd[i];
@@ -128,6 +131,7 @@ export async function commitImport(client, matched, mode, singlePlaylistName, ex
       { kind: "playlist", id: existing ? existing.id : null, title: destMeta.name },
       toAdd.map(toLogTrack)
     );
+    onRecord?.(record);
     let playlistId = existing && existing.id;
     let firstError = null;
     try {

@@ -2,124 +2,37 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>YouTube Music Manager & Migrator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Music Mover — for YouTube Music</title>
+  <link rel="icon" href="../../icons/icon-32.png" />
   <link rel="stylesheet" href="index.css" />
 </head>
 <body>
-  <div id="app">
-    <header>
-      <h1>YouTube Music Manager</h1>
-      <p id="tab-status" class="status">Checking…</p>
-      <nav>
-        <button data-view="collections" class="active">Library</button>
-        <button data-view="import">Import</button>
-        <button data-view="log">Activity &amp; Undo</button>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <button class="brand" data-nav="home" aria-label="Music Mover home">
+        <img src="../../icons/icon-48.png" alt="" width="28" height="28" />
+        <span>Music Mover</span>
+      </button>
+      <nav class="tabs" aria-label="Main">
+        <button data-nav="home">Home</button>
+        <button data-nav="library">My music</button>
+        <button data-nav="import">Bring songs in</button>
+        <button data-nav="history">History</button>
       </nav>
-    </header>
+    </div>
+  </header>
 
-    <section id="view-collections">
-      <div class="toolbar">
-        <button id="refresh-collections">Refresh</button>
-        <span class="hint">Playlists and Liked Songs in your account.</span>
-      </div>
-      <div id="collections-list"></div>
-    </section>
+  <main id="main">
+    <section id="view-home" class="view"></section>
+    <section id="view-library" class="view" hidden></section>
+    <section id="view-import" class="view" hidden></section>
+    <section id="view-history" class="view" hidden></section>
+  </main>
 
-    <section id="view-collection-detail" hidden>
-      <div class="toolbar toolbar-detail">
-        <button id="back-to-collections">&larr; Back</button>
-        <h2 id="detail-title"></h2>
-        <button id="refresh-collection-detail" title="Re-fetch from YouTube Music">↻</button>
-        <input id="filter-input" type="text" placeholder="Filter title / artist / album" />
-        <select id="sort-select">
-          <option value="_fetchIndex">Date added</option>
-          <option value="title">Title</option>
-          <option value="artistsDisplay">Artist</option>
-          <option value="album">Album</option>
-          <option value="duration_seconds">Duration</option>
-        </select>
-        <button id="sort-dir">↓</button>
-      </div>
-      <div class="toolbar toolbar-actions">
-        <span id="selection-count">0 selected</span>
-        <button id="select-all">Select all (filtered)</button>
-        <button id="clear-selection">Clear</button>
-        <button id="action-remove" disabled>Remove</button>
-        <button id="action-unlike" disabled hidden>Un-like</button>
-        <select id="move-target"></select>
-        <button id="action-move" disabled>Move to…</button>
-      </div>
-      <p class="hint">Undo restores membership, not position — a restored track is re-added to the end.</p>
-      <div id="track-list" class="vlist-container"></div>
-    </section>
-
-    <section id="view-import" hidden>
-      <div class="toolbar">
-        <p id="jiosaavn-status" class="status">Checking…</p>
-        <button id="jiosaavn-refresh">Re-check</button>
-      </div>
-      <div class="toolbar">
-        <button id="jiosaavn-load">Load JioSaavn library</button>
-      </div>
-
-      <div id="jiosaavn-inventory" hidden>
-        <label class="row-check"><input type="checkbox" id="jiosaavn-include-liked" checked /> Liked Songs (<span id="jiosaavn-liked-count">0</span>)</label>
-        <div id="jiosaavn-playlist-list"></div>
-
-        <button id="import-preview">Preview matches</button>
-      </div>
-
-      <div class="toolbar" style="border-top: 1px solid var(--border); margin-top: 1rem; padding-top: 1rem;"></div>
-      <h3>Amazon Music (experimental)</h3>
-      <p class="hint">
-        Amazon's API can't be called directly from here (see
-        <code>migrator/PHASE3_AMAZON_DISCOVERY.md</code>) — instead, open a logged-in Amazon Music
-        tab, navigate to the collection you want (Library &gt; Songs, or a specific playlist),
-        <strong>reload that tab</strong>, wait for the songs to show, and click Capture: this scrolls
-        that page for you and reads the data Amazon's own page loads, without ever touching your
-        Amazon credentials. Only the page currently open in the Amazon tab is imported.
-      </p>
-      <div class="toolbar">
-        <label>Name for this collection (used as the playlist name in Mirror mode):</label>
-      </div>
-      <div class="toolbar">
-        <input type="text" id="amazon-collection-name" placeholder="e.g. Amazon Liked Songs" value="Amazon Music" />
-        <button id="amazon-capture">Capture current Amazon page</button>
-      </div>
-      <div class="toolbar">
-        <label class="row-check"><input type="checkbox" id="amazon-is-liked" /> This is my Amazon liked songs / library songs (in Mirror mode it goes to Liked Music, not a playlist)</label>
-      </div>
-
-      <p id="import-progress" class="status"></p>
-
-      <div id="import-preview-results" hidden>
-        <p id="import-summary"></p>
-        <details>
-          <summary>Review (needs a human look) — <span id="review-count">0</span></summary>
-          <ul id="review-list"></ul>
-        </details>
-        <details>
-          <summary>Not found — <span id="notfound-count">0</span></summary>
-          <ul id="notfound-list"></ul>
-        </details>
-        <p class="hint">Where should the AUTO matches go?</p>
-        <div class="toolbar mode-toolbar">
-          <label><input type="radio" name="import-mode" value="liked" checked /> Like all songs</label>
-          <label><input type="radio" name="import-mode" value="single" /> Single playlist:</label>
-          <input type="text" id="single-playlist-name" placeholder="blank = &quot;JioSaavn Import&quot; / &quot;Amazon Music Import&quot;" />
-          <label><input type="radio" name="import-mode" value="mirror" /> Mirror playlists (source name = destination playlist)</label>
-        </div>
-
-        <button id="import-commit">Commit import (AUTO matches only)</button>
-      </div>
-
-      <div id="import-commit-results" hidden></div>
-    </section>
-
-    <section id="view-log" hidden>
-      <div id="log-list"></div>
-    </section>
-  </div>
+  <div id="dialog-root"></div>
+  <div id="toast-root" aria-live="polite"></div>
   <script type="module" src="app.js"></script>
 </body>
 </html>

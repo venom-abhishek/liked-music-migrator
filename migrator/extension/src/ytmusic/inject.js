@@ -100,6 +100,14 @@
   }
 
   const ACTIONS = {
+    // Connection check for the UI: is the page ready, and is someone signed
+    // in? Returns booleans only — never the cookie or any token.
+    status: async () => ({
+      ready: !!(window.ytcfg && typeof window.ytcfg.get === "function"),
+      signedIn:
+        !!getCookie("__Secure-3PAPISID") &&
+        !(window.ytcfg && typeof window.ytcfg.get === "function" && window.ytcfg.get("LOGGED_IN") === false),
+    }),
     // Liked Songs is a synthetic playlist with the fixed browseId "VLLM".
     browseLikedSongs: () => callInnertube("browse", { browseId: "VLLM" }),
     likeSong: (videoId) => callInnertube("like/like", { target: { videoId } }),

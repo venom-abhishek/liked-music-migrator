@@ -1,6 +1,6 @@
 # Handover — liked-music-migrator browser extension
 
-**Last updated:** 2026-09-26
+**Last updated:** 2026-09-30
 **Written for:** a fresh Claude Code session picking this up with no memory of prior conversations. Read this file fully before doing anything else. It's self-contained.
 
 ## What this is
@@ -38,11 +38,38 @@ Phases 0–3 are built and merged. A full review pass followed (2026-09-26, bran
    - Move/new-playlist asks for confirmation before creating anything.
 9. **Tests.** `migrator/extension/tests/` has 39 Node unit tests covering fuzz, normalize, parsers, reconcile, matcher, Amazon extraction, importer and undo. They have no dependencies and use an in-memory IndexedDB. Run them with `cd migrator/extension && npm test`. They also run in GitHub Actions (`.github/workflows/test.yml`).
 
+## UI overhaul (2026-09-30)
+
+The operator said the old UI was nearly unusable for non-technical people, so the whole UI was rebuilt. The engine, storage and matching code are unchanged apart from two small additions: an `onRecord` callback on `commitImport`, and the empty-artist-name filter in the matcher.
+
+- **Name:** "Music Mover for YouTube Music", with a real toolbar icon (`icons/`). The manifest is at version 0.2.0.
+- **Structure** (`src/ui/`):
+  - `app.js`: navigation between Home, My music, Bring songs in and History.
+  - `library.js`: the manager.
+  - `import-wizard.js`: the 5-step import.
+  - `history.js`: the history screen.
+  - `connection.js`: "is X open / signed in", with one-click fixes that open, focus or reload the tab.
+  - `dialogs.js`: in-page confirm/prompt/error dialogs and toasts that replace alert/confirm/prompt, plus `explainError()` for plain-language errors.
+  - `dom.js`: helpers. `h()` never parses HTML, so names from any service are safe.
+- **New UX features:**
+  - Undo button in the toast after every action.
+  - Floating action bar for selections, and shift-click range select.
+  - CSV "Save a copy" of any list.
+  - The import review lets the user tick "Please check" (REVIEW) matches, with a Listen link to verify them. This is a first slice of the Phase 4 "surface match buckets" item.
+  - Retry for failed searches, a list of not-found songs that can be saved, a progress bar with a Stop button, and "Undo this import" on the done screen.
+  - A warning before closing the tab mid-import.
+  - Light and dark themes, a narrow-window layout, keyboard support in dialogs.
+- **New page-script actions:**
+  - `status` in `ytmusic/inject.js`. It returns booleans only: page ready and signed in, never the cookie.
+  - `ping` in `sources/jiosaavn.js`.
+  - An older loaded copy answers "Unknown action", which `connection.js` treats as connected.
+- **Preview without accounts:** `dev/fake-chrome.js` and `dev/preview.mjs` (see the README "Development" section). Use these to check any UI change before asking the operator.
+
 ## Needs a live check by the operator (not verifiable from here)
 
 The fixes above were tested with unit tests and a headless browser that fakes Chrome's extension APIs, but not against the real sites. Ask the operator to reload the extension at `chrome://extensions` and then run these checks:
 
-1. **YT auth still works with the new account headers.** Open the extension's Library tab. The playlists and counts should load as before.
+1. **YT auth still works with the new account headers.** Open the extension's My music tab. The playlists and counts should load as before.
 2. **Move + undo** on a disposable playlist. Create two test playlists in YT Music, move 2 tracks between them, check Activity & Undo, then undo. The tracks should go back and the text should match what happened.
 3. **Amazon Capture button, end to end.** Loose ends from the previous handover still apply:
    - (a) Open a small playlist in the Amazon tab, reload the tab, click Capture: expect the right track count.
@@ -52,7 +79,7 @@ The fixes above were tested with unit tests and a headless browser that fakes Ch
 ## Not done yet
 
 1. **Phase 4 (power features):** duplicate finder, artist/album grouping with bulk select (manage side and import-preview side), one-click CSV backup before bulk removal, and richer match buckets in the import UI (for example, letting the user accept REVIEW matches). See `EXTENSION_SPEC.md` §7.
-2. **Better-looking UI.** The operator has said they want this eventually. The current UI is plain. Treat it as a real ask when Phase 4 touches the UI.
+2. **UI.** Rebuilt on 2026-09-30 (see above). The operator hasn't seen it on real data yet, so ask for their reactions and keep the language non-technical.
 3. **Minor, known:**
    - Undoing a removal of *two copies* of the same song restores one copy. YT refuses duplicate adds unless `dedupeOption` is used, which hasn't been explored.
    - The import's "already present" check also matches on normalized title + artist, so two different songs with identical title and artist would be treated as the same.

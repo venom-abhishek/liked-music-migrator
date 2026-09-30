@@ -43,7 +43,7 @@ function extractCandidates(parsedResults, allowVideo) {
     out.push({
       videoId: r.videoId,
       title: r.title || "",
-      artists: (r.artists || []).map((a) => a.name).join(", "),
+      artists: (r.artists || []).map((a) => a.name).filter(Boolean).join(", "), // matcher.py skips empty names too
       album: r.album ? r.album.name : "",
       duration_seconds: r.duration_seconds ?? null,
       resultType: r.resultType,

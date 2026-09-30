@@ -36,6 +36,7 @@ async function call(action, args = []) {
 
 export function makeJioSaavnClient() {
   return {
+    ping: () => call("ping"),
     getLikedIds: () => call("getLikedIds"),
     getPlaylists: () => call("getPlaylists"),
     hydrate: (ids) => call("hydrate", [ids]),

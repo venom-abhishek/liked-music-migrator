@@ -73,6 +73,19 @@ function assertEditSucceeded(data, what) {
 /** Thin, typed façade over inject.js's ACTIONS. Stateless — safe to create once and reuse. */
 export function makeYtMusicClient() {
   return {
+    // Raw call without the HTTP-result unwrapping — `status` returns plain data, not an API response.
+    status: async () => {
+      const tab = await findYtMusicTab();
+      if (!tab) throw new YtMusicNotFoundError("No open music.youtube.com tab. Open one, log in, and try again.");
+      let resp;
+      try {
+        resp = await chrome.tabs.sendMessage(tab.id, { source: UI_REQUEST_SOURCE, action: "status", args: [] });
+      } catch (err) {
+        throw new YtMusicCallError(`Couldn't reach the YouTube Music tab (${err.message || err}). Try reloading that tab.`);
+      }
+      if (!resp || !resp.ok) throw new YtMusicCallError((resp && resp.error) || "No response from the YouTube Music tab.");
+      return resp.result;
+    },
     browse: (browseId) => call("browse", [browseId]),
     browseContinuationBody: (continuation) => call("browseContinuationBody", [continuation]),
     browseContinuationUrl: (browseId, continuation) => call("browseContinuationUrl", [browseId, continuation]),

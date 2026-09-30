@@ -41,12 +41,31 @@ ever automated by this tool.
 There's no Chrome Web Store listing yet (that costs a one-time $5 developer
 fee; source-only install is free in the meantime). To install:
 
-1. Download or `git clone` this repository.
+1. Download this repository (green **Code** button → **Download ZIP**) and
+   unzip it.
 2. Open Chrome and go to `chrome://extensions`.
 3. Turn on **Developer mode** (top-right toggle).
 4. Click **Load unpacked** and select the `migrator/extension` folder.
-5. Open a tab to `music.youtube.com` and make sure you're logged in there.
-6. Click the extension's toolbar icon to open its UI.
+5. Click the puzzle-piece icon in Chrome's toolbar and pin **Music Mover**.
+6. Click the Music Mover icon. It opens its own tab and tells you, step by
+   step, what to open and sign in to.
+
+## Using it
+
+The extension opens as its own tab with four sections:
+
+- **Home**: shows whether YouTube Music is connected (with a one-click fix
+  if it isn't) and links to the two main jobs.
+- **My music**: your playlists and Liked songs. Open one, search or sort,
+  tick songs (shift-click selects a range), then **Move to…**, **Remove**
+  or **Un-like** from the bar at the bottom. Every change asks first and
+  shows an **Undo** button afterwards. **Save a copy** downloads the list
+  as a spreadsheet file.
+- **Bring songs in**: a 5-step guide for copying songs from JioSaavn or
+  Amazon Music. Nothing is written until the last step. You see which
+  songs matched clearly, which need a quick check (with a **Listen**
+  button), and which weren't found. You then choose where they go.
+- **History**: every change in plain words, each with an **Undo** button.
 
 ## Honest caveats
 
@@ -100,6 +119,12 @@ npm test
 ```
 
 They also run automatically on every push and pull request (GitHub Actions).
+
+To preview the UI without any accounts, `dev/fake-chrome.js` stands in for
+Chrome's extension APIs and for the three music sites, using realistic fake
+data. `dev/preview.mjs` clicks through every screen with it and saves
+screenshots (it needs Playwright: `node dev/preview.mjs [outDir]`). Neither
+file is used by the extension itself.
 
 ## License
 

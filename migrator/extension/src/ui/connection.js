@@ -154,6 +154,9 @@ export function connectionCard(key, { onChange, compact = false } = {}) {
       clearInterval(timer);
       return;
     }
+    // Only re-check while the card is actually on screen (not on a hidden
+    // screen, and not while this whole tab is in the background).
+    if (card.offsetParent === null || document.hidden) return;
     refresh();
   }, 4000);
 

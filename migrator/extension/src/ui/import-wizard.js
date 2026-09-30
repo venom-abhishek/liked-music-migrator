@@ -25,7 +25,14 @@ const client = makeYtMusicClient();
 const jiosaavn = makeJioSaavnClient();
 
 const MATCH_ERROR = "ERROR"; // the search itself failed — not the same as "not on YouTube Music"
-const SEARCH_GAP_MS = 120; // spacing between searches, to stay clear of rate limiting
+// Searches run a few at a time. There is deliberately NO fixed pause
+// between searches: Chrome stretches any timer in a background tab to at
+// least 1 second, so a "small" pause per song became ~1s per song as soon as
+// the user switched tabs (an earlier version did exactly that, and a
+// 500-song import got 8+ minutes slower). Pauses only happen after an
+// error, when backing off is the point.
+const SEARCH_CONCURRENCY = 3;
+const ERROR_BACKOFF_MS = 2000;
 const PAGE = 150; // rows rendered per list before "Show more"
 
 const SOURCES = {
@@ -353,17 +360,19 @@ function reading() {
 
 // ---- 4. Matching + review ----
 
+let backoffUntil = 0; // shared by all workers: after an error, everyone pauses briefly
+
 async function searchAndMatch(song) {
   // One retry after a pause: a single failed search is usually a transient
   // network blip or a brief rate limit, not a real answer.
-  try {
-    return await matchSong(song, client);
-  } catch (_first) {
-    await sleep(2000);
+  for (let attempt = 0; ; attempt++) {
+    const wait = backoffUntil - Date.now();
+    if (wait > 0) await sleep(wait);
     try {
       return await matchSong(song, client);
     } catch (err) {
-      return { decision: MATCH_ERROR, reason: String(err.message || err) };
+      backoffUntil = Math.max(backoffUntil, Date.now() + ERROR_BACKOFF_MS);
+      if (attempt >= 1) return { decision: MATCH_ERROR, reason: String(err.message || err) };
     }
   }
 }
@@ -372,19 +381,23 @@ async function runMatching(onlyIndexes) {
   w.cancelled = false;
   if (!onlyIndexes) w.matches = w.songs.map((song) => ({ song, match: null, include: false }));
   const todo = onlyIndexes || w.matches.map((_m, i) => i);
-  w.progress = { done: 0, total: todo.length, current: "" };
+  w.progress = { done: 0, total: todo.length, current: "", startedAt: Date.now() };
   go("matching");
-  for (const i of todo) {
-    if (w.cancelled) break;
-    const entry = w.matches[i];
-    w.progress.current = `${entry.song.title} — ${entry.song.artists}`;
-    updateMatchingProgress();
-    entry.match = await searchAndMatch(entry.song);
-    entry.include = entry.match.decision === AUTO;
-    w.progress.done++;
-    updateMatchingProgress();
-    await sleep(SEARCH_GAP_MS);
+
+  let next = 0;
+  async function worker() {
+    while (!w.cancelled && next < todo.length) {
+      const entry = w.matches[todo[next++]];
+      w.progress.current = `${entry.song.title} — ${entry.song.artists}`;
+      updateMatchingProgress();
+      entry.match = await searchAndMatch(entry.song);
+      entry.include = entry.match.decision === AUTO;
+      w.progress.done++;
+      updateMatchingProgress();
+    }
   }
+  await Promise.all(Array.from({ length: Math.min(SEARCH_CONCURRENCY, todo.length) }, worker));
+
   if (w.cancelled && w.matches.every((m) => !m.match)) return go("choose");
   w.reviewTab = "ready";
   go("review");
@@ -399,7 +412,7 @@ function matching() {
     h("div", { class: "progress" }, h("div", { class: "progress-fill", style: { width: `${pct(p)}%` } })),
     h("p", { class: "progress-count" }, `${p.done.toLocaleString()} of ${plural(p.total, "song")}`),
     h("p", { class: "muted busy-sub" }, p.current),
-    h("p", { class: "muted small" }, `About ${eta(p)} left. You can leave this tab open and do something else meanwhile.`),
+    h("p", { class: "muted small eta-line" }, etaText(p)),
     button("Stop", {
       kind: "ghost",
       iconName: "x",
@@ -415,7 +428,9 @@ function pct(p) {
 }
 
 function eta(p) {
-  const secs = Math.max(0, (p.total - p.done) * 0.9);
+  // Measured speed once a few songs are done; a rough guess before that.
+  const perSong = p.done >= 5 ? (Date.now() - p.startedAt) / 1000 / p.done : 0.4;
+  const secs = Math.max(0, (p.total - p.done) * perSong);
   if (secs < 60) return "less than a minute";
   const mins = Math.round(secs / 60);
   return plural(mins, "minute");
@@ -430,6 +445,12 @@ function updateMatchingProgress() {
   if (count) count.textContent = `${p.done.toLocaleString()} of ${plural(p.total, "song")}`;
   const sub = root.querySelector(".busy-sub");
   if (sub) sub.textContent = p.current;
+  const etaEl = root.querySelector(".eta-line");
+  if (etaEl) etaEl.textContent = etaText(p);
+}
+
+function etaText(p) {
+  return `About ${eta(p)} left. You can switch to another tab meanwhile — just don't close this one.`;
 }
 
 function buckets() {

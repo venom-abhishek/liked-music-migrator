@@ -72,9 +72,21 @@ function rowKey(t) {
 
 // ---- Collections (playlist cards) ----
 
+let loadGen = 0; // only the newest load may update the screen (an older one can still be waiting on a stuck tab)
+
 async function loadCollections() {
+  const gen = ++loadGen;
   current = null;
-  const conn = connectionCard("youtube", { compact: true, onChange: (s) => s === "ok" && !collections && loadCollections() });
+  // Load again by itself once a problem shown on the card gets fixed (not on
+  // the card's first "ok", which would just duplicate the load below).
+  let sawProblem = false;
+  const conn = connectionCard("youtube", {
+    compact: true,
+    onChange: (s) => {
+      if (s !== "ok") sawProblem = true;
+      else if (sawProblem && gen === loadGen) loadCollections();
+    },
+  });
   mount(root, pageHeader("My music", "Pick a playlist to tidy up. You can move, remove or un-like songs — and undo anything."), conn, spinner("Loading your playlists…"));
   try {
     const likedResponse = await client.browse(LIKED_BROWSE_ID);
@@ -87,10 +99,12 @@ async function loadCollections() {
       title: p.title,
       count: p.count,
     }));
+    if (gen !== loadGen) return;
     collections = [liked, ...playlists];
     conn.stop();
     renderCollections();
   } catch (err) {
+    if (gen !== loadGen) return;
     // The connection card above already explains the most common causes
     // (tab not open / not signed in / needs reload) with a fix button, and
     // reloads this list by itself once it turns green.

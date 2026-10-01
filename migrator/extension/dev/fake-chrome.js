@@ -4,7 +4,7 @@
 // any accounts. Used by dev/preview.mjs (screenshots + smoke test).
 //
 // Scenario is read from window.__scenario (set before this runs), e.g.
-//   { yt: "ok" | "missing" | "signed-out" | "reload", jiosaavn: "ok" | "missing", amazon: "ok" | "missing", slow: 0 }
+//   { yt: "ok" | "missing" | "signed-out" | "reload" | "frozen", jiosaavn: "ok" | "missing", amazon: "ok" | "missing", slow: 0 }
 (() => {
   const sc = Object.assign({ yt: "ok", jiosaavn: "ok", amazon: "ok", slow: 0 }, window.__scenario || {});
   window.__calls = [];
@@ -150,6 +150,7 @@
         return tabs.filter((t) => !urls || (urls.includes("youtube") && t.url.includes("youtube")) || (urls.includes("jiosaavn") && t.url.includes("jiosaavn")));
       },
       sendMessage: async (id, msg) => {
+        if (id === 1 && sc.yt === "frozen") return new Promise(() => {}); // a hung tab never answers
         if (id === 1 && sc.yt === "reload") throw new Error("Could not establish connection. Receiving end does not exist.");
         if (id === 1) return ytAction(msg.action, msg.args || []);
         if (id === 2) return jsAction(msg.action, msg.args || []);

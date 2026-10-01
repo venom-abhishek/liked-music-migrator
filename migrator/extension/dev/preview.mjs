@@ -160,6 +160,11 @@ await page.waitForTimeout(300);
 await snap(page, "problem-youtube-needs-reload");
 await page.close();
 
+page = await open({ name: "frozen", yt: "frozen" }, { hash: "#library" });
+await page.waitForSelector(".conn-card.tone-warn", { timeout: 15000 });
+await snap(page, "problem-youtube-not-responding");
+await page.close();
+
 page = await open({ name: "mobile" }, { width: 420, height: 860, hash: "#library" });
 await page.waitForSelector(".playlist-card");
 await page.locator(".playlist-card", { hasText: "Chill" }).click();

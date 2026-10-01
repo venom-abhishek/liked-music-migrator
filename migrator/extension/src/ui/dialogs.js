@@ -148,6 +148,10 @@ export function explainError(err) {
     return { message: "YouTube Music isn't open.", fix: "Open music.youtube.com in a tab, sign in, and try again." };
   if (/__Secure-3PAPISID|Not signed in/i.test(raw))
     return { message: "You're not signed in to YouTube Music.", fix: "Sign in on the YouTube Music tab, then try again." };
+  if (/YouTube Music tab isn't responding/i.test(raw))
+    return { message: "Your YouTube Music tab stopped responding.", fix: "Reload the YouTube Music tab — or close it and open music.youtube.com again — then try again. If YouTube Music won't load at all, even on its own, wait a while: the problem is on YouTube's side." };
+  if (/JioSaavn tab isn't responding/i.test(raw))
+    return { message: "Your JioSaavn tab stopped responding.", fix: "Reload the JioSaavn tab, then try again." };
   if (/Receiving end does not exist|Couldn't reach the YouTube Music tab/i.test(raw))
     return { message: "The extension can't talk to your YouTube Music tab yet.", fix: "Reload the YouTube Music tab (press F5 in it), then try again." };
   if (/Couldn't reach the JioSaavn tab/i.test(raw))

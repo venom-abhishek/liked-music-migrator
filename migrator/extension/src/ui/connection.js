@@ -58,6 +58,7 @@ export async function checkService(key) {
     // updated) doesn't know the status action — it is reachable, though.
     if (/Unknown action/i.test(msg)) return { state: "ok", tab };
     if (/Not signed in|__Secure-3PAPISID/i.test(msg)) return { state: "signed-out", tab };
+    if (/isn't responding/i.test(msg)) return { state: "stuck", tab };
     return { state: "reload", tab };
   }
 }
@@ -81,6 +82,12 @@ const COPY = {
   missing: (n) => ({ title: `${n} isn't open`, text: `Open ${n} in a tab and sign in. Keep that tab open while you use this.`, tone: "warn", iconName: "alert" }),
   "signed-out": (n) => ({ title: `You're not signed in to ${n}`, text: `Sign in on the ${n} tab, then come back here.`, tone: "warn", iconName: "alert" }),
   reload: (n) => ({ title: `${n} needs a quick reload`, text: `The ${n} tab was opened before this extension started. Reloading it fixes that.`, tone: "warn", iconName: "refresh" }),
+  stuck: (n) => ({
+    title: `${n} isn't responding`,
+    text: `The ${n} tab seems stuck. Reloading it usually fixes this. If ${n} won't load even on its own, the problem is on their side — wait a while and try again.`,
+    tone: "warn",
+    iconName: "alert",
+  }),
   loading: (n) => ({ title: `${n} is still loading…`, text: "Give it a moment.", tone: "neutral", iconName: "refresh" }),
 };
 
@@ -118,7 +125,7 @@ export function connectionCard(key, { onChange, compact = false } = {}) {
     const actions = [];
     if (state === "missing") actions.push(button(`Open ${svc.name}`, { kind: "primary", iconName: "external", onClick: () => openService(key).then(() => poll(8)) }));
     if (state === "signed-out") actions.push(button(`Go to ${svc.name} to sign in`, { kind: "primary", iconName: "external", onClick: () => focusTab(tab).then(() => poll(20)) }));
-    if (state === "reload")
+    if (state === "reload" || state === "stuck")
       actions.push(
         button("Reload it for me", {
           kind: "primary",

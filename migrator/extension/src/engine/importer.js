@@ -1,17 +1,20 @@
 // Applies the three destination modes and writes AUTO matches, deduping
 // against existing YT state and within the current run. Port of writer.py's
-// role, adapted to batch playlist adds into one API call per destination
-// (YT Music's edit_playlist endpoint accepts multiple actions per request —
-// the old Python tool went one-at-a-time with a sleep between each because
-// it had to be gentle across a whole CLI run; a single batched call per
-// destination here is both faster and exactly what YT Music's own
-// multi-select "add to playlist" does).
+// role, adapted to batch playlist adds (YT Music's edit_playlist endpoint
+// accepts multiple actions per request — the old Python tool went
+// one-at-a-time with a sleep between each; batching is both faster and what
+// YT Music's own multi-select "add to playlist" does).
 
 import { AUTO } from "./matcher.js";
 import { songKey } from "./normalize.js";
 import { fetchAllTracks } from "./reconcile.js";
 import { playlistIdToBrowseId } from "../ytmusic/parsers.js";
-import { logAction, ACTION_TYPES } from "../storage/log.js";
+import { startAction, saveAction, finishAction, ACTION_TYPES } from "../storage/log.js";
+
+// Playlist adds go in chunks rather than one call for the whole group, so a
+// very large import doesn't depend on one huge request being accepted, and
+// so progress is logged as each chunk lands.
+const ADD_CHUNK_SIZE = 50;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -24,13 +27,14 @@ function destinationFor(song, mode, singlePlaylistName) {
   return song.collection_type === "liked" ? { kind: "liked" } : { kind: "playlist", name: song.collection_name };
 }
 
-function toLogTrack(entry) {
+function toLogTrack(c) {
   return {
-    videoId: entry.videoId,
-    setVideoId: entry.setVideoId || null,
-    title: entry.song.title,
-    artistsDisplay: entry.song.artists,
-    album: entry.song.album,
+    videoId: c.videoId,
+    setVideoId: null,
+    title: c.song.title,
+    artistsDisplay: c.song.artists,
+    album: c.song.album,
+    added: false,
   };
 }
 
@@ -43,9 +47,31 @@ function toLogTrack(entry) {
  * separate ledger (the Python tool's separate ledger-based dedup check
  * turned out to be redundant dead weight in practice — see PROGRESS_REPORT
  * §2.3 — live-state comparison is what actually did the work).
- * Reports progress per destination group via `onProgress(text)`.
+ * `sourceMeta`: { kind, title } for the action log, e.g. { kind: "amazon", title: "Amazon Music" }.
+ * Reports progress per destination group via `onProgress(text)`, and hands
+ * each action-log record to `onRecord(record)` as it's created (the UI uses
+ * these for its "Undo this import" button).
+ *
+ * Logging is write-ahead (see storage/log.js): each destination's action
+ * record exists before its first write, and each track is flagged `added`
+ * as soon as its write succeeds — so a failure partway leaves an accurate,
+ * undoable record of exactly what did get written.
  */
-export async function commitImport(client, matched, mode, singlePlaylistName, existingLibrary, onProgress) {
+export async function commitImport(client, matched, mode, singlePlaylistName, existingLibrary, onProgress, sourceMeta, onRecord) {
+  // Checks before anything is written (the guard rails are ported from the
+  // 2026-10 ChatGPT review). An entry is writable if the matcher was sure
+  // (AUTO) or a person ticked it in the review screen (match.approved).
+  if (!["liked", "single", "mirror"].includes(mode)) throw new Error(`Unknown import mode: ${mode}`);
+  if (mode === "single" && !(singlePlaylistName || "").trim()) throw new Error("Please enter a name for the playlist.");
+  if (matched.some((e) => !e.match || !e.match.chosen || !e.match.chosen.videoId || !(e.match.decision === AUTO || e.match.approved))) {
+    throw new Error("Only matches that were found clearly, or that you ticked, can be added.");
+  }
+
+  const source = {
+    kind: (sourceMeta && sourceMeta.kind) || "import",
+    id: "import",
+    title: `${(sourceMeta && sourceMeta.title) || "External"} import`,
+  };
   const results = [];
   const likedVideoIds = new Set(existingLibrary.likedTracks.map((t) => t.videoId));
   const likedKeys = new Set(existingLibrary.likedTracks.map((t) => songKey(t.title, t.artistsDisplay)));
@@ -59,50 +85,53 @@ export async function commitImport(client, matched, mode, singlePlaylistName, ex
     groups.get(key).entries.push(item);
   }
 
+  // Two existing playlists with the same name: there's no way to know which
+  // one is meant, so refuse before writing anything rather than guess.
+  for (const { destMeta } of groups.values()) {
+    if (destMeta.kind !== "playlist") continue;
+    const sameName = existingLibrary.playlists.filter((p) => p.title === destMeta.name).length;
+    if (sameName > 1) {
+      throw new Error(`You have ${sameName} playlists called "${destMeta.name}". Rename all but one in YouTube Music first, so the songs can't go into the wrong one.`);
+    }
+  }
+
   for (const { destMeta, entries } of groups.values()) {
-    onProgress?.(`Writing to "${destMeta.kind === "liked" ? "Liked Music" : destMeta.name}"…`);
+    const destLabel = destMeta.kind === "liked" ? "Liked Music" : destMeta.name;
+    onProgress?.(`Writing to "${destLabel}"…`);
 
     if (destMeta.kind === "liked") {
       const candidates = entries.map((e) => ({ song: e.song, videoId: e.match.chosen.videoId }));
-      const toAdd = dedupeAgainstAndWithinRun(candidates, likedVideoIds, likedKeys, results, entries);
-      for (const c of toAdd) {
+      const toAdd = dedupeAgainstAndWithinRun(candidates, likedVideoIds, likedKeys, results);
+      if (toAdd.length === 0) continue;
+      const record = await startAction(ACTION_TYPES.IMPORT, source, { kind: "liked", id: "LM", title: "Liked Music" }, toAdd.map(toLogTrack));
+      onRecord?.(record);
+      let firstError = null;
+      for (let i = 0; i < toAdd.length; i++) {
+        const c = toAdd[i];
         try {
           await client.likeSong(c.videoId);
+          record.tracks[i].added = true;
+          await saveAction(record);
           await sleep(150);
           results.push({ song: c.song, outcome: "added" });
           likedVideoIds.add(c.videoId);
           likedKeys.add(songKey(c.song.title, c.song.artists));
         } catch (err) {
+          firstError = firstError || err;
           results.push({ song: c.song, outcome: "error", error: String(err.message || err) });
         }
+        onProgress?.(`Writing to "${destLabel}": ${i + 1}/${toAdd.length}…`);
       }
-      if (toAdd.length) {
-        await logAction(
-          ACTION_TYPES.IMPORT,
-          { kind: "jiosaavn", id: "import", title: "JioSaavn import" },
-          { kind: "liked", id: "LM", title: "Liked Music" },
-          toAdd.map((c) => toLogTrack(c))
-        );
-      }
+      await finishAction(record, firstError);
       continue;
     }
 
     // playlist destination
-    let playlistMeta = playlistsByName.get(destMeta.name);
-    let playlistId;
-    let createdNew = false;
-    if (playlistMeta) {
-      playlistId = playlistMeta.id;
-    } else {
-      playlistId = await client.createPlaylist(destMeta.name, "Imported by YT Music Manager & Migrator");
-      createdNew = true;
-      playlistsByName.set(destMeta.name, { id: playlistId, title: destMeta.name });
-    }
-
+    const existing = playlistsByName.get(destMeta.name);
     let existingVideoIds = new Set();
     let existingKeys = new Set();
-    if (!createdNew) {
-      const tracks = await fetchAllTracks(client, playlistIdToBrowseId(playlistId));
+    if (existing) {
+      const tracks = await fetchAllTracks(client, playlistIdToBrowseId(existing.id));
       tracks.forEach((t) => {
         existingVideoIds.add(t.videoId);
         existingKeys.add(songKey(t.title, t.artistsDisplay));
@@ -110,40 +139,73 @@ export async function commitImport(client, matched, mode, singlePlaylistName, ex
     }
 
     const candidates = entries.map((e) => ({ song: e.song, videoId: e.match.chosen.videoId }));
-    const toAdd = dedupeAgainstAndWithinRun(candidates, existingVideoIds, existingKeys, results, entries);
+    const toAdd = dedupeAgainstAndWithinRun(candidates, existingVideoIds, existingKeys, results);
+    if (toAdd.length === 0) continue;
 
-    if (toAdd.length) {
-      const addResp = await client.addPlaylistItems(playlistId, toAdd.map((c) => c.videoId));
-      const setVideoIdByVideoId = {};
-      for (const r of addResp.playlistEditResults || []) {
-        const data = r && r.playlistEditVideoAddedResultData;
-        if (data && data.videoId && data.setVideoId) setVideoIdByVideoId[data.videoId] = data.setVideoId;
+    // Record first, then create the playlist (if needed) and record its id
+    // straight away — so even if every add below fails, the new playlist is
+    // on record and undo can delete it.
+    const record = await startAction(
+      ACTION_TYPES.IMPORT,
+      source,
+      { kind: "playlist", id: existing ? existing.id : null, title: destMeta.name },
+      toAdd.map(toLogTrack)
+    );
+    onRecord?.(record);
+    let playlistId = existing && existing.id;
+    let firstError = null;
+    try {
+      if (!playlistId) {
+        playlistId = await client.createPlaylist(destMeta.name, "Imported by YT Music Manager & Migrator");
+        record.createdPlaylistId = playlistId;
+        record.destination.id = playlistId;
+        await saveAction(record);
+        playlistsByName.set(destMeta.name, { id: playlistId, title: destMeta.name });
       }
-      toAdd.forEach((c) => {
-        c.setVideoId = setVideoIdByVideoId[c.videoId] || null;
-        results.push({ song: c.song, outcome: "added" });
-      });
-      await logAction(
-        ACTION_TYPES.IMPORT,
-        { kind: "jiosaavn", id: "import", title: "JioSaavn import" },
-        { kind: "playlist", id: playlistId, title: destMeta.name },
-        toAdd.map((c) => toLogTrack(c)),
-        createdNew ? { createdPlaylistId: playlistId } : {}
-      );
-    } else if (createdNew) {
-      await logAction(ACTION_TYPES.PLAYLIST_CREATE, null, { kind: "playlist", id: playlistId, title: destMeta.name }, [], {
-        createdPlaylistId: playlistId,
+
+      for (let start = 0; start < toAdd.length; start += ADD_CHUNK_SIZE) {
+        const chunk = toAdd.slice(start, start + ADD_CHUNK_SIZE);
+        onProgress?.(`Writing to "${destLabel}": ${Math.min(start + chunk.length, toAdd.length)}/${toAdd.length}…`);
+        const addResp = await client.addPlaylistItems(playlistId, chunk.map((c) => c.videoId));
+        const setVideoIdByVideoId = {};
+        for (const r of addResp.playlistEditResults || []) {
+          const data = r && r.playlistEditVideoAddedResultData;
+          if (data && data.videoId && data.setVideoId) setVideoIdByVideoId[data.videoId] = data.setVideoId;
+        }
+        chunk.forEach((c, j) => {
+          const logTrack = record.tracks[start + j];
+          const setVideoId = setVideoIdByVideoId[c.videoId] || null;
+          // Recorded as added either way, so undo will look for it and take
+          // it out if it is there (log.js looks up a missing item id). But
+          // without YouTube Music's confirmation it is reported as a problem,
+          // not as a success.
+          logTrack.added = true;
+          logTrack.setVideoId = setVideoId;
+          if (setVideoId) {
+            results.push({ song: c.song, outcome: "added" });
+          } else {
+            logTrack.unconfirmed = true;
+            results.push({ song: c.song, outcome: "error", error: "YouTube Music didn't confirm this one. Check the playlist; running the import again adds it if it's missing." });
+          }
+        });
+        await saveAction(record);
+      }
+    } catch (err) {
+      firstError = err;
+      record.tracks.forEach((t, j) => {
+        if (!t.added) results.push({ song: toAdd[j].song, outcome: "error", error: String(err.message || err) });
       });
     }
+    await finishAction(record, firstError);
   }
 
   return results;
 }
 
-function dedupeAgainstAndWithinRun(candidates, existingVideoIds, existingKeys, results, entries) {
+function dedupeAgainstAndWithinRun(candidates, existingVideoIds, existingKeys, results) {
   const seen = new Set();
   const toAdd = [];
-  candidates.forEach((c, i) => {
+  candidates.forEach((c) => {
     const key = songKey(c.song.title, c.song.artists);
     if (existingVideoIds.has(c.videoId) || existingKeys.has(key)) {
       results.push({ song: c.song, outcome: "already_present" });

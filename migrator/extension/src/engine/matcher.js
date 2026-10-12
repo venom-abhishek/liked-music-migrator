@@ -1,7 +1,7 @@
 // Deterministic search + scoring + bucket decision. No AI, no LLM calls —
 // port of engine/matcher.py, proven on a real 792-track migration.
 
-import { normalizeTitle, normalizeArtist, detectVersionTag } from "./normalize.js";
+import { normalizeTitle, normalizeArtist, detectVersionTag, songKey } from "./normalize.js";
 import { tokenSetRatio } from "./fuzz.js";
 import { SONGS_FILTER_PARAM, parseSearchResults } from "../ytmusic/parsers.js";
 
@@ -21,6 +21,18 @@ export const DEFAULT_CONFIG = {
   weightDuration: 0.15,
   songResultBonus: 5,
   searchLimit: 5,
+  // An otherwise-AUTO match whose runner-up (a different video) scores within
+  // this many points goes to REVIEW: too close to call without a human.
+  minimumMargin: 4,
+};
+
+// Version tags that make a recording genuinely different. "remaster" and
+// "explicit" are left out on purpose: YouTube Music titles often carry them
+// for what is the same recording a user would want.
+const DISTINCT_VERSION_TAGS = new Set(["remix", "live", "acoustic", "cover", "sped_up", "instrumental"]);
+const distinctTag = (title) => {
+  const tag = detectVersionTag(title);
+  return DISTINCT_VERSION_TAGS.has(tag) ? tag : "";
 };
 
 function durationScore(srcDur, candDur, cfg) {
@@ -43,7 +55,7 @@ function extractCandidates(parsedResults, allowVideo) {
     out.push({
       videoId: r.videoId,
       title: r.title || "",
-      artists: (r.artists || []).map((a) => a.name).join(", "),
+      artists: (r.artists || []).map((a) => a.name).filter(Boolean).join(", "), // matcher.py skips empty names too
       album: r.album ? r.album.name : "",
       duration_seconds: r.duration_seconds ?? null,
       resultType: r.resultType,
@@ -65,10 +77,14 @@ function scoreCandidates(song, candidates, cfg) {
     c.durationScore = durationScore(song.duration_sec, c.duration_seconds, cfg);
     let combined = cfg.weightTitle * c.titleScore + cfg.weightArtist * c.artistScore + cfg.weightDuration * c.durationScore;
     if (c.resultType === "song") combined += cfg.songResultBonus;
-    c.combined = combined;
+    // Raw score for ranking and the margin check; the shown score is capped
+    // at 100 (the song bonus can push a perfect match to 105). Capping before
+    // sorting would turn clear winners into ties.
+    c.rawCombined = combined;
+    c.combined = Math.min(100, combined);
   }
   candidates.sort((a, b) => {
-    if (b.combined !== a.combined) return b.combined - a.combined;
+    if (b.rawCombined !== a.rawCombined) return b.rawCombined - a.rawCombined;
     if (b.durationScore !== a.durationScore) return b.durationScore - a.durationScore;
     return (a.resultType === "song" ? 0 : 1) - (b.resultType === "song" ? 0 : 1);
   });
@@ -112,5 +128,21 @@ export async function matchSong(song, client, config) {
     decision = NOT_FOUND;
   }
 
-  return { decision, chosen: best, runnerUp, videoFallback: isVideoPick, versionTag, reason: "scored" };
+  // Extra caution before anything is written without a human looking at it
+  // (ported from the 2026-10 ChatGPT review): an otherwise-AUTO match goes to
+  // REVIEW if it is a different version (live vs studio etc.), only a video,
+  // nearly tied with a different candidate, or the source had no artist.
+  let reason = "scored";
+  if (decision === AUTO) {
+    if (distinctTag(best.title) !== distinctTag(song.title)) reason = "version_mismatch";
+    else if (isVideoPick) reason = "video_fallback";
+    // Near-tie with a DIFFERENT song only. YouTube Music often lists the same
+    // song twice (album version and single); either is right, so that alone
+    // shouldn't send it to a person.
+    else if (runnerUp && songKey(runnerUp.title, runnerUp.artists) !== songKey(best.title, best.artists) && best.rawCombined - runnerUp.rawCombined < cfg.minimumMargin) reason = "ambiguous_candidates";
+    else if (!normalizeArtist(song.artists)) reason = "missing_artist";
+    if (reason !== "scored") decision = REVIEW;
+  }
+
+  return { decision, chosen: best, runnerUp, candidates: candidates.slice(0, cfg.searchLimit), videoFallback: isVideoPick, versionTag, reason };
 }

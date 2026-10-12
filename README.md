@@ -1,16 +1,17 @@
 # liked-music-migrator
 
 A browser extension for managing your **YouTube Music** library and migrating
-liked songs / playlists into it from other services (currently **JioSaavn**;
-Amazon Music planned) — using your own already-logged-in browser sessions.
+liked songs / playlists into it from other services (**JioSaavn** and
+**Amazon Music**) — using your own already-logged-in browser sessions.
 No servers, no accounts to create, no paid services, and **no AI/LLM calls at
 runtime**: matching is deterministic string+duration logic.
 
-> **Status: Phases 0-2 complete; Amazon Music import in progress.** The
+> **Status: Phases 0-3 complete, Phase 4 mostly done (v0.3).** The
 > manager works for YouTube Music (list, sort/filter/select, remove/un-like/
 > move, undo), and both JioSaavn and Amazon Music can be extracted, matched,
 > and imported (Like all / single playlist / mirror playlists), with a
-> preview step before anything is written and undo after. Amazon uses
+> preview step before anything is written and undo after. Amazon import is
+> the least battle-tested part (see [Roadmap](#roadmap)). Amazon uses
 > response interception rather than calling its API directly — see
 > [`migrator/PHASE3_AMAZON_DISCOVERY.md`](migrator/PHASE3_AMAZON_DISCOVERY.md)
 > for why. See [Roadmap](#roadmap) below, or the full implementation
@@ -40,12 +41,47 @@ ever automated by this tool.
 There's no Chrome Web Store listing yet (that costs a one-time $5 developer
 fee; source-only install is free in the meantime). To install:
 
-1. Download or `git clone` this repository.
+1. Download this repository (green **Code** button → **Download ZIP**, or
+   [this direct link](https://github.com/venom-abhishek/liked-music-migrator/archive/refs/heads/master.zip))
+   and unzip it.
 2. Open Chrome and go to `chrome://extensions`.
 3. Turn on **Developer mode** (top-right toggle).
 4. Click **Load unpacked** and select the `migrator/extension` folder.
-5. Open a tab to `music.youtube.com` and make sure you're logged in there.
-6. Click the extension's toolbar icon to open its UI.
+5. Click the puzzle-piece icon in Chrome's toolbar and pin **Music Mover**.
+6. Click the Music Mover icon. It opens its own tab and tells you, step by
+   step, what to open and sign in to.
+
+## Updating to a newer version (keeps your History)
+
+Your History is stored by Chrome against the folder the extension was
+loaded from, so update *that* folder instead of removing the extension:
+download and unzip the new version, copy everything inside its
+`migrator/extension` folder, paste it into the folder shown under
+**"Loaded from"** on `chrome://extensions` (choose "Replace"), then click
+the extension's reload icon.
+
+## Using it
+
+The extension opens as its own tab with four sections:
+
+- **Home**: shows whether YouTube Music is connected (with a one-click fix
+  if it isn't) and links to the two main jobs.
+- **My music**: your playlists and Liked songs. Open one, search or sort,
+  tick songs (shift-click selects a range), then **Move to…**, **Remove**
+  or **Un-like** from the bar at the bottom. **Quick select** picks every
+  song **by an artist**, or the extra copies of **duplicates**. Every change asks first and
+  shows an **Undo** button afterwards. **Save a copy** downloads the list
+  as a **backup file** (which can be brought back in later) or a
+  spreadsheet.
+- **Bring songs in**: a 5-step guide for copying songs from JioSaavn,
+  Amazon Music, or a Music Mover **backup file**. Nothing is written until the last step. You see which
+  songs matched clearly, which need a quick check (with a **Listen**
+  button, and a choice between close options), and which weren't found. To
+  be safe, a different version (live, remix…) or a near-tie is never added
+  without your say-so. If you close the tab partway, it offers to
+  **continue where you left off**. At the end you can **save a report**
+  of what happened to every song. You then choose where they go.
+- **History**: every change in plain words, each with an **Undo** button.
 
 ## Honest caveats
 
@@ -53,17 +89,20 @@ fee; source-only install is free in the meantime). To install:
   logged into can act on your behalf. It never asks for or stores a
   password, and it never logs the session values it reads.
 - **This is a scraping/automation tool against services that don't offer a
-  public API for this.** It relies on YouTube Music's, JioSaavn's, and (once
-  built) Amazon Music's internal, undocumented endpoints. That is very
+  public API for this.** It relies on YouTube Music's, JioSaavn's, and
+  Amazon Music's internal, undocumented endpoints. That is very
   likely against those platforms' Terms of Service, even though it only ever
   acts as *you*, using *your* session, doing things you could do by hand in
   the UI.
 - **It can break at any time** if a platform changes its internal API shape,
   page structure, or auth mechanism. There is no SLA and no support
   guarantee — this is a personal tool shared as source.
-- **Destructive actions are logged and undoable** (see the spec's action-log
-  design), but undo restores *membership*, not *position* — an undone
-  removal re-adds a track to the end of a playlist, not its original spot.
+- **Destructive actions are logged and undoable** (Activity & Undo tab). Each
+  action is recorded *before* it starts and updated step by step, so even an
+  action that fails halfway can be undone for exactly the part that happened.
+  Undo restores *membership*, not *position* — an undone removal re-adds a
+  track to the end of a playlist, not its original spot — and it never
+  deletes a playlist that has tracks in it that it didn't put there.
 
 ## Roadmap
 
@@ -77,9 +116,33 @@ Phased build order (each phase gates the next):
 3. **Phase 2 — JioSaavn importer.** ✅ Extraction + deterministic matching +
    three import modes (Like all / single playlist / mirrored playlists).
 4. **Phase 3 — Amazon Music source.** ✅ (via response interception, not
-   direct API calls — see `migrator/PHASE3_AMAZON_DISCOVERY.md`.)
-5. **Phase 4 — Power features.** Duplicate finder, artist/album bulk select,
-   CSV backup, match-bucket surfacing.
+   direct API calls — see `migrator/PHASE3_AMAZON_DISCOVERY.md`.) Verified
+   on a 37-track playlist; paging through a large playlist is implemented
+   but not yet verified live.
+5. **Phase 4 — Power features.** Mostly done: duplicate finder, select by
+   artist, backup/CSV copies with restore, match buckets you can tick and
+   choose between, resume an unfinished import, import report. Still to
+   do: album grouping, an automatic backup prompt before bulk removals.
+
+## Development
+
+The extension has no build step — edit files under `migrator/extension/src/`
+and reload it at `chrome://extensions`. Unit tests for the matching,
+parsing, Amazon extraction, importer and undo logic run under Node (22+),
+with no dependencies to install:
+
+```
+cd migrator/extension
+npm test
+```
+
+They also run automatically on every push and pull request (GitHub Actions).
+
+To preview the UI without any accounts, `dev/fake-chrome.js` stands in for
+Chrome's extension APIs and for the three music sites, using realistic fake
+data. `dev/preview.mjs` clicks through every screen with it and saves
+screenshots (it needs Playwright: `node dev/preview.mjs [outDir]`). Neither
+file is used by the extension itself.
 
 ## License
 

@@ -78,23 +78,32 @@ function parseCapturedBody(bodyText) {
   });
 }
 
-/** Scrolls the page in steps, capturing Skyfire API responses, until content stops growing. */
+/**
+ * Scrolls the page in steps until its content stops growing, so the page
+ * fetches every remaining batch of tracks, then returns every captured
+ * response for the page that's open. amazon-inject.js records from page
+ * load onwards, so the batch the page fetched before any scrolling (for a
+ * short playlist, the whole thing) is included — it is deliberately NOT
+ * cleared first.
+ */
 export async function autoScrollAndCapture(client, opts = {}) {
-  const { maxSteps = 80, stableStop = 3, pxPerStep = 1600, waitMs = 900, onProgress } = opts;
-  await client.clearCaptures();
-  await client.startCapture();
+  const { maxSteps = 200, stableStop = 3, pxPerStep = 1600, waitMs = 900, onProgress } = opts;
   let stableCount = 0;
   for (let i = 0; i < maxSteps; i++) {
-    onProgress?.(`Scrolling (${i + 1}/${maxSteps})…`);
     const { scrollHeightBefore, scrollHeightAfter, atBottom } = await client.scrollStep(pxPerStep, waitMs);
+    const captured = await client.countCaptures();
+    onProgress?.(`Scrolling the Amazon tab (step ${i + 1}) — ${captured} response(s) with track data so far…`);
     if (scrollHeightAfter <= scrollHeightBefore) {
+      // Not grown this step. Stop once it's stayed that way a few steps in a
+      // row AND we're at the bottom (a slow response can leave the height
+      // unchanged for a step or two mid-list).
       stableCount++;
-      if (stableCount >= stableStop || atBottom) break;
+      if (stableCount >= stableStop && atBottom) break;
+      if (stableCount >= stableStop * 3) break; // stuck, not at bottom: give up rather than loop forever
     } else {
       stableCount = 0;
     }
   }
-  await client.stopCapture();
   return client.getCaptures();
 }
 

@@ -27,7 +27,15 @@
     if (!message || message.source !== UI_REQUEST_SOURCE) return false;
 
     const requestId = `req_${Date.now()}_${counter++}`;
+    // Forget requests that never got an answer, so they don't pile up. The
+    // UI side (client.js) gives up sooner and tells the user; this is only
+    // cleanup, set longer than the UI's longest wait.
+    const timer = setTimeout(() => {
+      pending.delete(requestId);
+      sendResponse({ ok: false, error: "The YouTube Music tab isn't responding." });
+    }, 150000);
     pending.set(requestId, (response) => {
+      clearTimeout(timer);
       sendResponse(response);
     });
     window.postMessage(

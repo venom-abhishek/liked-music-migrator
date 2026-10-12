@@ -19,10 +19,15 @@ import { getContinuationToken, nav, CONTINUATION_ITEMS } from "../ytmusic/naviga
 
 /**
  * Fetches every track in a playlist or Liked Songs collection, paging to
- * exhaustion and de-duplicating by videoId (a track can legitimately repeat
- * across pages if YT Music's continuation cursor overlaps — de-dup keeps the
- * first occurrence, which also keeps the first, most-likely-correct
- * setVideoId for that occurrence).
+ * exhaustion and de-duplicating overlapping pages (YT Music's continuation
+ * cursor can repeat rows).
+ *
+ * De-dup key is the playlist ENTRY (setVideoId) when there is one, not the
+ * song (videoId): a playlist can legitimately hold the same song twice, as
+ * two entries with different setVideoIds, and collapsing those would hide
+ * the extra copies from the manager (so they could never be seen or removed)
+ * and make its counts disagree with YouTube Music's. Liked Songs rows have no
+ * setVideoId and a song can only be liked once, so those fall back to videoId.
  */
 export async function fetchAllTracks(client, browseId) {
   const first = await client.browse(browseId);
@@ -30,7 +35,11 @@ export async function fetchAllTracks(client, browseId) {
   const tracks = contentData && contentData.contents ? parsePlaylistItems(contentData.contents) : [];
 
   let continuationToken = contentData ? getContinuationToken(contentData.contents) : null;
+  // A cursor seen twice would page forever; stop with a clear error instead.
+  const visited = new Set();
   while (continuationToken) {
+    if (visited.has(continuationToken)) throw new Error("YouTube Music repeated a page while loading this list. Reload and try again.");
+    visited.add(continuationToken);
     const resp = await client.browseContinuationBody(continuationToken);
     const continuationItems = nav(resp, CONTINUATION_ITEMS, true);
     if (!continuationItems || continuationItems.length === 0) break;
@@ -43,8 +52,9 @@ export async function fetchAllTracks(client, browseId) {
   const seen = new Set();
   const deduped = [];
   for (const t of tracks) {
-    if (seen.has(t.videoId)) continue;
-    seen.add(t.videoId);
+    const key = t.setVideoId || t.videoId;
+    if (seen.has(key)) continue;
+    seen.add(key);
     deduped.push(t);
   }
   deduped.forEach((t, i) => {
@@ -63,7 +73,10 @@ export async function fetchAllLibraryPlaylists(client) {
   const first = await client.browse("FEmusic_liked_playlists");
   let { playlists, continuationToken } = parseLibraryPlaylists(first);
 
+  const visited = new Set();
   while (continuationToken) {
+    if (visited.has(continuationToken)) throw new Error("YouTube Music repeated a page while loading your playlists. Reload and try again.");
+    visited.add(continuationToken);
     const resp = await client.browseContinuationUrl("FEmusic_liked_playlists", continuationToken);
     const page = parseLibraryPlaylistsContinuation(resp);
     if (page.playlists.length === 0) break;

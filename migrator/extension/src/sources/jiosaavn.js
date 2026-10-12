@@ -33,6 +33,9 @@
   }
 
   const ACTIONS = {
+    // Connection check for the UI. JioSaavn has no reliable page-side
+    // "signed in" flag, so this only proves the tab is reachable.
+    ping: async () => ({ ok: true, url: location.href }),
     getLikedIds: async () => {
       const data = await getJson({ __call: "library.getAll" });
       // Podcast/show items live under "show", not "song" — reading only

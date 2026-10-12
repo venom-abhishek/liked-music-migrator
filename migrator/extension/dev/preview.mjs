@@ -94,6 +94,28 @@ await page.locator(".dialog button", { hasText: "Remove 1 song" }).click();
 await page.waitForSelector(".toast.tone-success");
 await page.fill(".search-input", "zzzz");
 await snap(page, "library-search-empty");
+await page.fill(".search-input", "");
+// quick select: duplicates, by artist; save a copy
+await page.locator(".quick-select button", { hasText: "Duplicates" }).click();
+await page.waitForSelector(".action-bar:not([hidden])");
+const dupText = await page.textContent(".action-bar-text");
+// (2 planted; earlier steps in this run may have removed one of them)
+if (!/[12] songs? selected/.test(dupText)) errors.push(`duplicates selected: ${dupText}`);
+await snap(page, "library-duplicates-selected");
+await page.locator(".action-bar button", { hasText: "Clear" }).click();
+await page.locator(".quick-select button", { hasText: "By artist" }).click();
+await page.waitForSelector(".dialog .pick-option");
+await page.locator(".dialog .pick-option").nth(0).click();
+await snap(page, "library-select-by-artist");
+await page.locator(".dialog button", { hasText: "Select their songs" }).click();
+await page.waitForSelector(".action-bar:not([hidden])");
+await page.locator(".action-bar button", { hasText: "Clear" }).click();
+await clickText(page, "Save a copy");
+await page.waitForSelector(".dialog");
+await snap(page, "library-save-a-copy");
+const [download] = await Promise.all([page.waitForEvent("download"), page.locator(".dialog .choice-card", { hasText: "Backup file" }).click()]);
+const backupPath = path.join(out, "workout-backup.json");
+await download.saveAs(backupPath);
 await page.close();
 
 page = await open({ name: "liked-dark" }, { dark: true, hash: "#library" });
@@ -137,6 +159,48 @@ await snap(page, "import-8-done");
 await page.locator('.tabs [data-nav="history"]').click();
 await page.waitForSelector(".history-card");
 await snap(page, "history", true);
+await page.close();
+
+// ---- Restore from the backup saved above ----
+page = await open({ name: "backup" }, { hash: "#import" });
+await page.locator(".choice-card", { hasText: "backup" }).click();
+await page.waitForSelector(".conn-card.tone-success");
+await clickText(page, "Continue");
+await page.setInputFiles("#backup-file", backupPath);
+await page.waitForSelector(".resume-card");
+await snap(page, "backup-3-file-chosen");
+await clickText(page, "Bring back");
+await page.waitForSelector(".stat-grid");
+await clickText(page, "Continue with");
+await page.waitForSelector(".radio-card");
+await snap(page, "backup-6-destination");
+await page.close();
+
+// ---- Resume an unfinished import ----
+page = await open({ name: "resume" }, { hash: "#import" });
+await page.locator(".choice-card", { hasText: "JioSaavn" }).click();
+await page.waitForFunction(() => document.querySelectorAll(".conn-card.tone-success").length === 2);
+await clickText(page, "Continue");
+await page.waitForSelector(".pick-option");
+await clickText(page, "Find these songs");
+await page.waitForFunction(() => /^(2\d|[3-9]\d) of/.test(document.querySelector(".progress-count")?.textContent || ""));
+await clickText(page, "Stop");
+await page.waitForSelector(".stat-grid");
+await page.waitForTimeout(900); // let the draft save
+await page.reload();
+await page.waitForSelector(".resume-card");
+await snap(page, "resume-banner");
+await page.locator(".resume-card button", { hasText: "Continue" }).click();
+await page.waitForSelector(".stat-grid", { timeout: 60000 });
+const total = await page.$$eval(".stat-num", (els) => els.reduce((n, e) => n + Number(e.textContent.replace(/\D/g, "")), 0));
+if (total !== 67) errors.push(`resume: expected all 67 songs checked, got ${total}`);
+await clickText(page, "Continue with");
+await page.locator(".wizard-nav .btn-primary").click();
+await page.locator(".dialog button", { hasText: "Yes, add them" }).click();
+await page.waitForSelector(".done-screen", { timeout: 60000 });
+const [report] = await Promise.all([page.waitForEvent("download"), clickText(page, "Save a report")]);
+const reportText = fs.readFileSync(await report.path(), "utf8");
+if (!/What happened/.test(reportText) || reportText.trim().split("\n").length !== 68) errors.push("report: unexpected contents");
 await page.close();
 
 // ---- Amazon path ----

@@ -13,7 +13,12 @@ This is a Chrome MV3 browser extension. It manages a YouTube Music library and i
 
 ## Current state
 
-Phases 0–3 are built and merged. A full review pass followed (2026-09-26, branch `claude/intelligent-hypatia-f2yqct`), which fixed the problems listed further down.
+Everything is on `master`, which is the single source of truth; there are no side branches. Phases 0–3 are done; most of Phase 4 is too (see "Not done yet"). Work after the original handover, in order:
+1. A review pass (2026-09-26).
+2. A full UI rebuild ("Music Mover", 2026-09-30).
+3. Speed and stuck-tab fixes.
+4. ChatGPT's v0.2 work, ported (2026-10-12).
+5. The rest of ChatGPT's features rebuilt into the new UI, and everything merged to `master` (2026-10-12).
 
 - **Phase 0: YouTube Music auth.** `src/ytmusic/inject.js` runs in the MAIN world of a `music.youtube.com` tab so it can read `ytcfg`. It signs requests with `SAPISIDHASH`. `src/ytmusic/bridge.js` relays messages between the extension's UI page and inject.js. Verified live.
 - **Phase 1: Manager core.** Files: `src/ui/app.js`, `src/engine/reconcile.js`, `src/storage/log.js`. It lists playlists and Liked Songs, opens a collection in a virtualized track list, and supports sort, filter, multi-select, remove, un-like and move, plus an IndexedDB action log with undo. Verified live at real scale.
@@ -89,12 +94,18 @@ Between sessions the operator had ChatGPT work on the project. Its push to GitHu
 - `npm run check` syntax-checks every file (also in CI).
 - ChatGPT's tests, adapted.
 
+**Also rebuilt into the new UI (2026-10-12)**, so no feature from either line of work is missing:
+- **Backup file** export from "Save a copy". The JSON keeps ChatGPT's version-1 layout, so files from either build load.
+- **Restore from a backup:** a third source, "A backup file", in Bring songs in. It re-adds the exact recorded video ids with no searching (`engine/libraryTools.js` `parseBackup`).
+- **Quick select by artist** in My music. It uses individual artist credits, which is better than ChatGPT's whole-string match.
+- **Unfinished-import resume** (`storage/drafts.js`, its own IndexedDB database). The draft is saved during matching and review. Home of Bring songs in shows "You have an unfinished import… Continue / Discard". Resuming searches only the songs not yet checked. This replaces ChatGPT's chrome.storage "saved preview", so no `storage` permission is needed.
+- **Save a report** on the done screen: a CSV of every song and what happened to it. This replaces ChatGPT's JSON "migration report".
+
 **Not carried over, and why:**
 - Its UI changes to the old `app.js`: replaced by the redesign, which already covered them (hidden-view fix, mode picker placement, escaping, viewport, focus, busy states).
 - Split move records: this branch's write-ahead MOVE record with per-track flags is safer.
 - Refusing undo when a playlist item id is missing: this branch looks the id up instead.
-- Saved previews in `chrome.storage`: its own handoff lists quota and staleness problems. If wanted, redo it on IndexedDB.
-- JSON backup restore, and "select all by artist": possible follow-ups.
+- Its chrome.storage saved previews and JSON report: replaced by the IndexedDB draft and the CSV report above.
 
 ## Needs a live check by the operator (not verifiable from here)
 
@@ -109,7 +120,10 @@ The fixes above were tested with unit tests and a headless browser that fakes Ch
 
 ## Not done yet
 
-1. **Phase 4 (power features):** duplicate finder, artist/album grouping with bulk select (manage side and import-preview side), one-click CSV backup before bulk removal, and richer match buckets in the import UI (for example, letting the user accept REVIEW matches). See `EXTENSION_SPEC.md` §7.
+1. **Phase 4, what's left.** Done so far: the duplicate finder, select by artist, "Save a copy" (backup or CSV), and match buckets with ticking and choosing alternatives. Still to do:
+   - Album grouping (on the manage side and on the import-preview side).
+   - An automatic backup prompt before bulk removals.
+   - Custom search for "Not found" songs.
 2. **UI.** Rebuilt on 2026-09-30 (see above). The operator hasn't seen it on real data yet, so ask for their reactions and keep the language non-technical.
 3. **Minor, known:**
    - Undoing a removal of *two copies* of the same song restores one copy. YT refuses duplicate adds unless `dedupeOption` is used, which hasn't been explored.

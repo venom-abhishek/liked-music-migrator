@@ -6,7 +6,7 @@ liked songs / playlists into it from other services (**JioSaavn** and
 No servers, no accounts to create, no paid services, and **no AI/LLM calls at
 runtime**: matching is deterministic string+duration logic.
 
-> **Status: Phases 0-3 complete; Phase 4 (power features) next.** The
+> **Status: Phases 0-3 complete, Phase 4 mostly done (v0.3).** The
 > manager works for YouTube Music (list, sort/filter/select, remove/un-like/
 > move, undo), and both JioSaavn and Amazon Music can be extracted, matched,
 > and imported (Like all / single playlist / mirror playlists), with a
@@ -41,14 +41,24 @@ ever automated by this tool.
 There's no Chrome Web Store listing yet (that costs a one-time $5 developer
 fee; source-only install is free in the meantime). To install:
 
-1. Download this repository (green **Code** button → **Download ZIP**) and
-   unzip it.
+1. Download this repository (green **Code** button → **Download ZIP**, or
+   [this direct link](https://github.com/venom-abhishek/liked-music-migrator/archive/refs/heads/master.zip))
+   and unzip it.
 2. Open Chrome and go to `chrome://extensions`.
 3. Turn on **Developer mode** (top-right toggle).
 4. Click **Load unpacked** and select the `migrator/extension` folder.
 5. Click the puzzle-piece icon in Chrome's toolbar and pin **Music Mover**.
 6. Click the Music Mover icon. It opens its own tab and tells you, step by
    step, what to open and sign in to.
+
+## Updating to a newer version (keeps your History)
+
+Your History is stored by Chrome against the folder the extension was
+loaded from, so update *that* folder instead of removing the extension:
+download and unzip the new version, copy everything inside its
+`migrator/extension` folder, paste it into the folder shown under
+**"Loaded from"** on `chrome://extensions` (choose "Replace"), then click
+the extension's reload icon.
 
 ## Using it
 
@@ -58,16 +68,19 @@ The extension opens as its own tab with four sections:
   if it isn't) and links to the two main jobs.
 - **My music**: your playlists and Liked songs. Open one, search or sort,
   tick songs (shift-click selects a range), then **Move to…**, **Remove**
-  or **Un-like** from the bar at the bottom. **Find duplicates** selects
-  the extra copies of songs that are in a playlist more than once. Every change asks first and
+  or **Un-like** from the bar at the bottom. **Quick select** picks every
+  song **by an artist**, or the extra copies of **duplicates**. Every change asks first and
   shows an **Undo** button afterwards. **Save a copy** downloads the list
-  as a spreadsheet file.
-- **Bring songs in**: a 5-step guide for copying songs from JioSaavn or
-  Amazon Music. Nothing is written until the last step. You see which
+  as a **backup file** (which can be brought back in later) or a
+  spreadsheet.
+- **Bring songs in**: a 5-step guide for copying songs from JioSaavn,
+  Amazon Music, or a Music Mover **backup file**. Nothing is written until the last step. You see which
   songs matched clearly, which need a quick check (with a **Listen**
   button, and a choice between close options), and which weren't found. To
   be safe, a different version (live, remix…) or a near-tie is never added
-  without your say-so. You then choose where they go.
+  without your say-so. If you close the tab partway, it offers to
+  **continue where you left off**. At the end you can **save a report**
+  of what happened to every song. You then choose where they go.
 - **History**: every change in plain words, each with an **Undo** button.
 
 ## Honest caveats
@@ -106,8 +119,10 @@ Phased build order (each phase gates the next):
    direct API calls — see `migrator/PHASE3_AMAZON_DISCOVERY.md`.) Verified
    on a 37-track playlist; paging through a large playlist is implemented
    but not yet verified live.
-5. **Phase 4 — Power features.** Duplicate finder, artist/album bulk select,
-   CSV backup, match-bucket surfacing.
+5. **Phase 4 — Power features.** Mostly done: duplicate finder, select by
+   artist, backup/CSV copies with restore, match buckets you can tick and
+   choose between, resume an unfinished import, import report. Still to
+   do: album grouping, an automatic backup prompt before bulk removals.
 
 ## Development
 

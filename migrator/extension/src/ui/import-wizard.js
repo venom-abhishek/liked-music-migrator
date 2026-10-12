@@ -16,7 +16,9 @@ import { autoScrollAndCapture, extractSongsFromCaptures } from "../engine/amazon
 import { matchSong, AUTO, REVIEW, NOT_FOUND } from "../engine/matcher.js";
 import { commitImport } from "../engine/importer.js";
 import { performUndo } from "../storage/log.js";
-import { h, icon, button, mount, spinner, plural, sleep, downloadText, toCsv } from "./dom.js";
+import { saveDraft, loadDraft, clearDraft } from "../storage/drafts.js";
+import { parseBackup } from "../engine/libraryTools.js";
+import { h, icon, button, mount, spinner, plural, sleep, downloadText, toCsv, timeAgo } from "./dom.js";
 import { confirmDialog, errorDialog, toast, infoDialog } from "./dialogs.js";
 import { connectionCard, reloadTab, focusTab } from "./connection.js";
 import { pageHeader, emptyState, invalidateLibrary } from "./library.js";
@@ -35,10 +37,14 @@ const SEARCH_CONCURRENCY = 3;
 const ERROR_BACKOFF_MS = 2000;
 const PAGE = 150; // rows rendered per list before "Show more"
 
+// `name`: in sentences ("from JioSaavn"); `title`: on the choice card;
+// `onLabel`: above the original song on the review screen.
 const SOURCES = {
-  jiosaavn: { key: "jiosaavn", name: "JioSaavn", logText: "JioSaavn", blurb: "Your liked songs and playlists" },
-  amazon: { key: "amazon", name: "Amazon Music", logText: "Amazon Music", blurb: "One playlist or song list at a time", beta: true },
+  jiosaavn: { key: "jiosaavn", name: "JioSaavn", title: "JioSaavn", onLabel: "On JioSaavn", logText: "JioSaavn", blurb: "Your liked songs and playlists" },
+  amazon: { key: "amazon", name: "Amazon Music", title: "Amazon Music", onLabel: "On Amazon Music", logText: "Amazon Music", blurb: "One playlist or song list at a time", beta: true },
+  backup: { key: "backup", name: "your backup", title: "A backup file", onLabel: "In your backup", logText: "a backup", blurb: "Bring back a playlist you saved with \"Save a copy\"", iconName: "save" },
 };
+const MAX_BACKUP_BYTES = 20 * 1024 * 1024;
 
 const STEPS = ["Choose app", "Connect", "Pick songs", "Check matches", "Add"];
 const STEP_OF = { source: 0, connect: 1, choose: 2, reading: 2, matching: 3, review: 3, destination: 4, adding: 4, done: 4 };
@@ -56,6 +62,7 @@ function freshState() {
     pickPlaylists: new Set(), // indexes
     amazonName: "",
     amazonIsLiked: false,
+    backup: null, // { title, kind, exportedAt, songs, fileName }
     songs: [],
     matches: [], // [{ song, match, include }]
     warnings: [],
@@ -92,7 +99,39 @@ function go(step) {
   window.scrollTo(0, 0);
 }
 
+// The unfinished import is saved while it's being checked, so closing the
+// tab doesn't lose the work (storage/drafts.js). Saving is batched.
+let draftTimer = null;
+function saveDraftSoon() {
+  if (!w.source || !w.matches.length || !["matching", "review", "destination"].includes(w.step)) return;
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => {
+    saveDraft({
+      sourceKey: w.source.key,
+      songs: w.songs,
+      matches: w.matches,
+      warnings: w.warnings,
+      amazonName: w.amazonName,
+      amazonIsLiked: w.amazonIsLiked,
+      backupTitle: w.backup && w.backup.title,
+      mode: w.mode,
+      playlistName: w.playlistName,
+    }).catch((err) => console.warn("Couldn't save the unfinished import:", err));
+  }, 600);
+}
+
+async function resumeDraft(d) {
+  w = freshState();
+  w.source = SOURCES[d.sourceKey];
+  Object.assign(w, { songs: d.songs, matches: d.matches, warnings: d.warnings || [], amazonName: d.amazonName || "", amazonIsLiked: !!d.amazonIsLiked, mode: d.mode || null, playlistName: d.playlistName || "" });
+  if (d.backupTitle) w.backup = { title: d.backupTitle };
+  const remaining = w.matches.map((m, i) => (m.match ? -1 : i)).filter((i) => i >= 0);
+  if (remaining.length) await runMatching(remaining);
+  else go("review");
+}
+
 function render() {
+  saveDraftSoon();
   const screens = { source, connect, choose, reading, matching, review, destination, adding, done };
   mount(root, pageHeader("Bring songs in", "Copy your songs from another music app into YouTube Music."), stepper(), h("div", { class: "wizard-body" }, screens[w.step]()));
 }
@@ -125,21 +164,33 @@ function source() {
       "button",
       {
         class: "choice-card",
-        onclick: () => {
+        onclick: async () => {
+          if (pendingDraft) {
+            const ok = await confirmDialog({
+              title: "Start a new import?",
+              message: "Your unfinished import will be thrown away. (Nothing it found was added to YouTube Music yet.)",
+              confirmText: "Start new",
+              cancelText: "Keep it",
+            });
+            if (!ok) return;
+            await clearDraft().catch(() => {});
+            pendingDraft = null;
+          }
           w = freshState();
           w.source = s;
           go("connect");
         },
       },
-      h("div", { class: `service-logo ${s.key}` }, s.name[0]),
-      h("div", {}, h("strong", {}, s.name, s.beta ? h("span", { class: "chip" }, "Beta") : null), h("span", { class: "muted" }, s.blurb)),
+      h("div", { class: `service-logo ${s.key}` }, s.iconName ? icon(s.iconName) : s.title[0]),
+      h("div", {}, h("strong", {}, s.title, s.beta ? h("span", { class: "chip" }, "Beta") : null), h("span", { class: "muted" }, s.blurb)),
       icon("forward", "chev")
     );
   return h(
     "div",
     {},
+    resumeBanner(),
     h("h2", {}, "Where are your songs now?"),
-    h("div", { class: "choice-grid" }, card(SOURCES.jiosaavn), card(SOURCES.amazon)),
+    h("div", { class: "choice-grid" }, card(SOURCES.jiosaavn), card(SOURCES.amazon), card(SOURCES.backup)),
     h(
       "p",
       { class: "muted small reassure" },
@@ -147,6 +198,45 @@ function source() {
       "Nothing is changed in your YouTube Music until the very last step, and everything this adds can be undone."
     )
   );
+}
+
+let pendingDraft = null;
+
+/** "You have an unfinished import" — filled in once the saved draft is read. */
+function resumeBanner() {
+  const box = h("div");
+  loadDraft()
+    .then((d) => {
+      pendingDraft = d;
+      if (!d || w.step !== "source") return;
+      const checked = d.matches.filter((m) => m.match).length;
+      const src = SOURCES[d.sourceKey] || { name: "another app" };
+      mount(
+        box,
+        h(
+          "div",
+          { class: "resume-card" },
+          h("div", { class: "conn-icon" }, icon("history")),
+          h(
+            "div",
+            { class: "grow" },
+            h("strong", {}, `You have an unfinished import from ${src.name}`),
+            h("div", { class: "muted small" }, `${checked.toLocaleString()} of ${plural(d.matches.length, "song")} checked · saved ${timeAgo(d.savedAt)}. Nothing from it has been added yet.`)
+          ),
+          button("Discard", {
+            kind: "ghost",
+            onClick: async () => {
+              await clearDraft().catch(() => {});
+              pendingDraft = null;
+              box.replaceChildren();
+            },
+          }),
+          button("Continue", { kind: "primary", iconName: "forward", onClick: () => resumeDraft(d) })
+        )
+      );
+    })
+    .catch(() => {});
+  return box;
 }
 
 // ---- 2. Connect ----
@@ -157,8 +247,18 @@ function connect() {
   const states = {};
   const update = (key) => (state) => {
     states[key] = state;
-    next.disabled = !(states.youtube === "ok" && states[s.key] === "ok");
+    next.disabled = !(states.youtube === "ok" && (s.key === "backup" || states[s.key] === "ok"));
   };
+  if (s.key === "backup") {
+    return h(
+      "div",
+      {},
+      h("h2", {}, "Open YouTube Music in this browser"),
+      h("p", { class: "muted" }, "The songs are added to the YouTube Music you're signed in to in this browser. Keep that tab open until it's done."),
+      h("div", { class: "conn-stack" }, connectionCard("youtube", { onChange: update("youtube") })),
+      nav("source", next)
+    );
+  }
   return h(
     "div",
     {},
@@ -173,7 +273,72 @@ function connect() {
 // ---- 3. Pick songs ----
 
 function choose() {
+  if (w.source.key === "backup") return chooseBackup();
   return w.source.key === "jiosaavn" ? chooseJioSaavn() : chooseAmazon();
+}
+
+function chooseBackup() {
+  const input = h("input", { type: "file", accept: ".json,application/json", class: "visually-hidden", id: "backup-file" });
+  const drop = h(
+    "label",
+    { class: "drop-zone", for: "backup-file" },
+    icon("save"),
+    h("strong", {}, w.backup ? "Choose a different file" : "Choose your backup file"),
+    h("span", { class: "muted small" }, "It's the file ending in .json that \"Save a copy\" put in your Downloads folder. You can also drag it here.")
+  );
+  const load = async (file) => {
+    if (!file) return;
+    if (file.size > MAX_BACKUP_BYTES) return errorDialog(new Error("That file is too big to be a Music Mover backup."), { title: "Can't use that file" });
+    try {
+      w.backup = { ...parseBackup(await file.text()), fileName: file.name };
+      render();
+    } catch (err) {
+      errorDialog(err, { title: "Can't use that file" });
+    }
+  };
+  input.addEventListener("change", () => load(input.files[0]));
+  drop.addEventListener("dragover", (e) => (e.preventDefault(), drop.classList.add("over")));
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (e) => {
+    e.preventDefault();
+    drop.classList.remove("over");
+    load(e.dataTransfer.files[0]);
+  });
+
+  const b = w.backup;
+  const summary = b
+    ? h(
+        "div",
+        { class: "resume-card" },
+        h("div", { class: `playlist-art tiny${b.kind === "liked" ? " liked" : ""}` }, icon(b.kind === "liked" ? "heart" : "music")),
+        h("div", { class: "grow" }, h("strong", {}, b.title), h("div", { class: "muted small" }, `${plural(b.songs.length, "song")}${b.exportedAt ? ` · saved ${timeAgo(b.exportedAt)}` : ""} · ${b.fileName}`))
+      )
+    : null;
+  const next = button(b ? `Bring back ${plural(b.songs.length, "song")}` : "Continue", { kind: "primary", iconName: "forward", disabled: !b || !b.songs.length, onClick: startBackup });
+  return h("div", {}, h("h2", {}, "Which backup should we bring back?"), summary, input, drop, h("div", { class: "wizard-nav" }, button("Back", { kind: "ghost", iconName: "back", onClick: () => go("connect") }), next));
+}
+
+async function startBackup() {
+  const b = w.backup;
+  w.songs = b.songs;
+  w.warnings = [];
+  // A backup records YouTube Music's own ids, so those songs need no search:
+  // they're the exact same songs. Only entries without an id get matched.
+  w.matches = b.songs.map((song) => ({
+    song,
+    match: song.videoId
+      ? { decision: AUTO, reason: "backup", chosen: { videoId: song.videoId, title: song.title, artists: song.artists, album: song.album, combined: 100 }, candidates: [] }
+      : null,
+    include: !!song.videoId,
+  }));
+  if (b.kind === "liked") w.mode = "liked";
+  else {
+    w.mode = "single";
+    w.playlistName = b.title;
+  }
+  const missing = w.matches.map((m, i) => (m.match ? -1 : i)).filter((i) => i >= 0);
+  if (missing.length) await runMatching(missing);
+  else go("review");
 }
 
 function chooseJioSaavn() {
@@ -394,6 +559,7 @@ async function runMatching(onlyIndexes) {
       entry.include = entry.match.decision === AUTO;
       w.progress.done++;
       updateMatchingProgress();
+      if (w.progress.done % 20 === 0) saveDraftSoon();
     }
   }
   await Promise.all(Array.from({ length: Math.min(SEARCH_CONCURRENCY, todo.length) }, worker));
@@ -577,7 +743,7 @@ function checkList(b) {
           "label",
           { class: "result-row compare" },
           includeBox(i),
-          h("div", { class: "compare-side" }, h("span", { class: "tag" }, `On ${w.source.name}`), h("strong", {}, song.title), h("div", { class: "muted small" }, song.artists)),
+          h("div", { class: "compare-side" }, h("span", { class: "tag" }, w.source.onLabel), h("strong", {}, song.title), h("div", { class: "muted small" }, song.artists)),
           icon("forward", "compare-arrow"),
           h(
             "div",
@@ -763,10 +929,52 @@ function adding() {
   return h("div", { class: "busy-screen" }, h("div", { class: "spinner large" }), h("h2", {}, "Adding your songs to YouTube Music…"), h("p", { class: "muted busy-sub" }, w.addingText), h("p", { class: "muted small" }, "Please keep this tab and the YouTube Music tab open until it's finished."));
 }
 
+const OUTCOME_TEXT = {
+  added: "Added",
+  already_present: "Already in your YouTube Music",
+  duplicate: "In your selection twice — added once",
+  error: "Couldn't be added",
+};
+
+/** Spreadsheet of every song in this import and what happened to it. */
+function saveReport() {
+  const bySong = new Map((w.results || []).map((r) => [r.song, r]));
+  const rows = [["Title", "Artist", "From", "What happened", "Details", "YouTube Music song", "YouTube Music link"]];
+  for (const m of w.matches) {
+    const r = bySong.get(m.song);
+    const d = m.match && m.match.decision;
+    let what;
+    if (r) what = OUTCOME_TEXT[r.outcome] || r.outcome;
+    else if (!m.match) what = "Not searched (stopped early)";
+    else if (d === MATCH_ERROR) what = "Search failed";
+    else if (d === NOT_FOUND) what = "Not found on YouTube Music";
+    else what = "Not added (not ticked)";
+    const c = m.match && m.match.chosen;
+    rows.push([
+      m.song.title,
+      m.song.artists,
+      m.song.collection_name || "",
+      what,
+      (r && r.error) || (m.match && REVIEW_REASONS[m.match.reason]) || "",
+      c ? `${c.title} — ${c.artists || ""}` : "",
+      c ? `https://music.youtube.com/watch?v=${c.videoId}` : "",
+    ]);
+  }
+  downloadText(`Import report - ${w.source.title} - ${new Date().toISOString().slice(0, 10)}.csv`, toCsv(rows));
+  toast("Saved the report to your Downloads folder.", { tone: "success" });
+}
+
 function done() {
   const r = { added: 0, already_present: 0, duplicate: 0, error: 0 };
   for (const x of w.results || []) r[x.outcome] = (r[x.outcome] || 0) + 1;
   const failed = w.fatal || r.error > 0;
+  // A clean finish has nothing left to resume. With problems, the draft is
+  // kept: resuming and adding again only adds what's still missing.
+  if (!failed && !w.draftCleared) {
+    w.draftCleared = true;
+    clearTimeout(draftTimer);
+    clearDraft().catch(() => {});
+  }
 
   const undoAll = async () => {
     const ok = await confirmDialog({
@@ -806,6 +1014,7 @@ function done() {
       { class: "done-actions" },
       button("Open YouTube Music", { kind: "primary", iconName: "external", onClick: () => chrome.tabs.create({ url: w.mode === "liked" ? "https://music.youtube.com/playlist?list=LM" : "https://music.youtube.com/library/playlists" }) }),
       button("See it in My music", { kind: "secondary", iconName: "music", onClick: () => onNavigate("library") }),
+      button("Save a report", { kind: "ghost", iconName: "save", title: "A spreadsheet of every song and what happened to it", onClick: saveReport }),
       button("Bring in more songs", { kind: "ghost", iconName: "plus", onClick: () => ((w = freshState()), render()) })
     ),
     w.records.length ? h("p", { class: "muted small" }, "Changed your mind? ", button("Undo this import", { kind: "ghost", size: "sm", iconName: "undo", onClick: undoAll }), " — or later, from History.") : null

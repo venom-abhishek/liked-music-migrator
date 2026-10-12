@@ -12,7 +12,7 @@ import { makeYtMusicClient } from "../ytmusic/client.js";
 import { fetchAllTracks, fetchAllLibraryPlaylists, CollectionState } from "../engine/reconcile.js";
 import { parsePlaylistHeaderMeta, playlistIdToBrowseId } from "../ytmusic/parsers.js";
 import { startAction, saveAction, finishAction, performUndo, ACTION_TYPES } from "../storage/log.js";
-import { duplicateExtras } from "../engine/libraryTools.js";
+import { duplicateExtras, toBackupJson, artistCounts, tracksByArtists } from "../engine/libraryTools.js";
 import { VirtualList } from "./virtual-list.js";
 import { h, icon, button, mount, spinner, plural, sleep, downloadText, toCsv } from "./dom.js";
 import { confirmDialog, openDialog, errorDialog, toast } from "./dialogs.js";
@@ -206,13 +206,23 @@ function renderDetailShell() {
       h(
         "div",
         { class: "detail-tools" },
-        isLiked ? null : button("Find duplicates", { kind: "ghost", iconName: "search", title: "Select the extra copies of songs that are in this playlist more than once", onClick: selectDuplicates }),
-        button("Save a copy", { kind: "ghost", iconName: "save", title: "Download this list as a spreadsheet file (CSV) — a backup you can keep", onClick: exportCsv }),
+        button("Save a copy", { kind: "ghost", iconName: "save", title: "Download this list as a backup or a spreadsheet", onClick: saveCopy }),
         button("Reload", { kind: "ghost", iconName: "refresh", title: "Get the latest from YouTube Music", onClick: loadTracks })
       )
     ),
     h("div", { class: "list-tools" }, h("div", { class: "search-wrap" }, icon("search"), search), sort),
-    h("label", { class: "select-all-row" }, els.selectAll, els.selectAllLabel),
+    h(
+      "div",
+      { class: "select-row" },
+      h("label", { class: "select-all-row" }, els.selectAll, els.selectAllLabel),
+      h(
+        "div",
+        { class: "quick-select" },
+        h("span", { class: "muted small" }, "Quick select:"),
+        button("By artist…", { kind: "secondary", size: "sm", iconName: "music", title: "Select every song by one or more artists", onClick: selectByArtist }),
+        isLiked ? null : button("Duplicates", { kind: "secondary", size: "sm", iconName: "list", title: "Select the extra copies of songs that are in this playlist more than once", onClick: selectDuplicates })
+      )
+    ),
     els.listArea,
     els.actionBar
   );
@@ -672,13 +682,105 @@ function selectDuplicates() {
   toast(`Selected ${plural(extras.length, "extra copy", "extra copies")}. The first copy of each song stays. Press "Remove from playlist" to delete the extras.`, { duration: 10000 });
 }
 
+async function selectByArtist() {
+  if (!state) return;
+  const artists = artistCounts(state.tracks);
+  if (!artists.length) return;
+  const picked = new Set();
+  const filter = h("input", { type: "search", class: "input", placeholder: "Find an artist", "aria-label": "Find an artist" });
+  const list = h("div", { class: "pick-list" });
+  const go = button("Select their songs", { kind: "primary", iconName: "check", disabled: true });
+  const summary = h("span", { class: "muted small" });
+  const update = () => {
+    const n = picked.size ? tracksByArtists(state.tracks, [...picked]).length : 0;
+    go.disabled = n === 0;
+    summary.textContent = n ? `${plural(n, "song")} will be selected` : "Tick one or more artists";
+  };
+  const renderList = () => {
+    const q = filter.value.trim().toLowerCase();
+    mount(
+      list,
+      artists
+        .filter((a) => !q || a.name.toLowerCase().includes(q))
+        .slice(0, 300)
+        .map((a) =>
+          h(
+            "label",
+            { class: "pick-option" },
+            h("input", { type: "checkbox", class: "check", checked: picked.has(a.name), onchange: (e) => (e.target.checked ? picked.add(a.name) : picked.delete(a.name), update()) }),
+            h("div", { class: "grow" }, h("strong", {}, a.name)),
+            h("span", { class: "muted small" }, plural(a.count, "song"))
+          )
+        )
+    );
+  };
+  filter.addEventListener("input", renderList);
+  renderList();
+  update();
+  const result = await openDialog({
+    title: "Select songs by artist",
+    iconName: "music",
+    wide: true,
+    body: (close) => {
+      go.addEventListener("click", () => close("go"));
+      return h("div", {}, h("p", {}, "Tick the artists whose songs you want to select — for example to move or remove them all at once."), artists.length > 8 ? filter : null, list, h("div", { class: "dialog-actions inline" }, summary, h("span", { class: "grow" }), button("Cancel", { kind: "ghost", onClick: () => close(null) }), go));
+    },
+  });
+  if (result !== "go") return;
+  if (filterText.trim()) clearSearch();
+  const songs = tracksByArtists(state.tracks, [...picked]);
+  songs.forEach((t) => selection.add(rowKey(t)));
+  if (vlist) vlist.refresh();
+  updateSelectionUI();
+  toast(`Selected ${plural(songs.length, "song")} by ${[...picked].join(", ")}.`);
+}
+
+async function saveCopy() {
+  if (!state) return;
+  const option = (value, iconName, title, text, close) =>
+    h(
+      "button",
+      { class: "choice-card compact", onclick: () => close(value) },
+      h("div", { class: "playlist-art tiny" }, icon(iconName)),
+      h("div", {}, h("strong", {}, title), h("span", { class: "muted small" }, text)),
+      icon("forward", "chev")
+    );
+  const choice = await openDialog({
+    title: `Save a copy of "${current.title}"`,
+    iconName: "save",
+    body: (close) =>
+      h(
+        "div",
+        {},
+        h("p", {}, `${plural(state.tracks.length, "song")}. The file goes to your Downloads folder; nothing in YouTube Music changes.`),
+        h(
+          "div",
+          { class: "option-stack" },
+          option("backup", "save", "Backup file (recommended)", "Keeps the exact songs. Bring them back any time with Bring songs in → A backup file.", close),
+          option("csv", "list", "Spreadsheet", "A list to open in Excel or Google Sheets. Good for looking through, not for restoring.", close)
+        )
+      ),
+    actions: [{ label: "Cancel", kind: "ghost", value: null }],
+  });
+  if (choice === "csv") exportCsv();
+  if (choice === "backup") exportBackup();
+}
+
+function fileBase() {
+  return `${current.title.replace(/[\\/:*?"<>|]+/g, "_")} - ${new Date().toISOString().slice(0, 10)}`;
+}
+
+function exportBackup() {
+  downloadText(`${fileBase()}.musicmover.json`, toBackupJson(current, state.tracks), "application/json");
+  toast(`Saved a backup of "${current.title}". To restore it later: Bring songs in → From a backup file.`, { tone: "success", duration: 12000 });
+}
+
 function exportCsv() {
   if (!state) return;
   const rows = [["Title", "Artist", "Album", "Length", "YouTube Music link"]].concat(
     state.tracks.map((t) => [t.title, t.artistsDisplay, t.album, t.duration || "", `https://music.youtube.com/watch?v=${t.videoId}`])
   );
-  const safe = current.title.replace(/[\\/:*?"<>|]+/g, "_");
-  downloadText(`${safe} - ${new Date().toISOString().slice(0, 10)}.csv`, toCsv(rows));
+  downloadText(`${fileBase()}.csv`, toCsv(rows));
   toast(`Saved a copy of "${current.title}" to your Downloads folder.`, { tone: "success" });
 }
 

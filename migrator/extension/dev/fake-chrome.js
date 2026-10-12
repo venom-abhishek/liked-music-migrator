@@ -29,6 +29,8 @@
     PLroad: Array.from({ length: 1234 }, (_, i) => ({ ...song(3000 + i), setVideoId: `s${3000 + i}` })),
   };
   const titles = { PLworkout: "Workout", PLchill: "Chill evenings", PLroad: "Road trip 2025" };
+  // Two songs are in Workout twice, so "Duplicates" has something to find.
+  yt.PLworkout.push({ ...yt.PLworkout[2], setVideoId: "sdup1" }, { ...yt.PLworkout[5], setVideoId: "sdup2" });
   let n = 90000;
 
   const js = { liked: Array.from({ length: 40 }, (_, i) => `js${i}`), playlists: [{ id: "p1", name: "Bollywood Hits", ids: Array.from({ length: 18 }, (_, i) => `jp${i}`) }, { id: "p2", name: "Late night \"lofi\"", ids: Array.from({ length: 9 }, (_, i) => `jq${i}`) }] };

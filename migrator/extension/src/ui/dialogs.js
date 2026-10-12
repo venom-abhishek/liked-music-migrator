@@ -199,6 +199,9 @@ export function toast(message, { tone = "neutral", action, duration = 8000 } = {
     );
   }
   el.append(h("button", { class: "toast-close", "aria-label": "Dismiss", onclick: dismiss }, icon("x")));
+  // Keep at most two on screen; the oldest gives way.
+  const shown = [...toastRoot().querySelectorAll(".toast:not(.leaving)")];
+  if (shown.length >= 2) shown[0].querySelector(".toast-close").click();
   toastRoot().append(el);
   timer = setTimeout(dismiss, duration);
   return dismiss;

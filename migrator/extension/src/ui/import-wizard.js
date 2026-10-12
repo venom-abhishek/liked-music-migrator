@@ -572,18 +572,58 @@ function checkList(b) {
       b.check.slice(0, w.shown.check).map((i) => {
         const { song, match } = w.matches[i];
         const c = match.chosen;
+        const why = REVIEW_REASONS[match.reason];
         return h(
           "label",
           { class: "result-row compare" },
           includeBox(i),
           h("div", { class: "compare-side" }, h("span", { class: "tag" }, `On ${w.source.name}`), h("strong", {}, song.title), h("div", { class: "muted small" }, song.artists)),
           icon("forward", "compare-arrow"),
-          h("div", { class: "compare-side" }, h("span", { class: "tag" }, "We found"), h("strong", {}, c.title), h("div", { class: "muted small" }, c.artists || "Unknown artist")),
+          h(
+            "div",
+            { class: "compare-side" },
+            h("span", { class: "tag" }, "We found"),
+            h("strong", {}, c.title),
+            h("div", { class: "muted small" }, c.artists || "Unknown artist"),
+            why ? h("div", { class: "why small" }, icon("help"), why) : null,
+            otherOptions(i)
+          ),
           listenLink(c.videoId)
         );
       })
     ),
     showMore("check", b.check.length)
+  );
+}
+
+// Plain-words reasons for "Please check" (match.reason from matcher.js).
+const REVIEW_REASONS = {
+  version_mismatch: "This looks like a different version (for example live, remix or acoustic).",
+  ambiguous_candidates: "There are two close options. Pick the right one below.",
+  video_fallback: "Only found as a music video, not as a song.",
+  missing_artist: "The original has no artist name, so we can't be sure.",
+};
+
+/** A picker for the other results the search returned, when there are any. */
+function otherOptions(i) {
+  const m = w.matches[i].match;
+  const options = (m.candidates || []).filter((c, k, all) => all.findIndex((x) => x.videoId === c.videoId) === k);
+  if (options.length < 2) return null;
+  const label = (c) => `${c.title} — ${c.artists || "Unknown artist"}${c.resultType === "video" ? " (video)" : ""}`;
+  return h(
+    "select",
+    {
+      class: "input select option-pick",
+      "aria-label": "Choose a different match",
+      onchange: (e) => {
+        const picked = options.find((c) => c.videoId === e.target.value);
+        if (!picked) return;
+        m.chosen = picked;
+        w.matches[i].include = true; // picking one means "this is the right one"
+        render();
+      },
+    },
+    options.map((c) => h("option", { value: c.videoId, selected: c.videoId === m.chosen.videoId }, label(c)))
   );
 }
 
@@ -696,7 +736,7 @@ async function startAdding() {
     const playlists = (await fetchAllLibraryPlaylists(client)).map((p) => ({ id: p.playlistId, title: p.title }));
     // commitImport takes { song, match } entries; REVIEW matches the user
     // ticked are included exactly like AUTO ones — the user made the call.
-    const entries = selected.map((m) => ({ song: m.song, match: m.match }));
+    const entries = selected.map((m) => ({ song: m.song, match: { ...m.match, approved: true } }));
     w.results = await commitImport(
       client,
       entries,

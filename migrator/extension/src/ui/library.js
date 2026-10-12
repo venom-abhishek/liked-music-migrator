@@ -12,6 +12,7 @@ import { makeYtMusicClient } from "../ytmusic/client.js";
 import { fetchAllTracks, fetchAllLibraryPlaylists, CollectionState } from "../engine/reconcile.js";
 import { parsePlaylistHeaderMeta, playlistIdToBrowseId } from "../ytmusic/parsers.js";
 import { startAction, saveAction, finishAction, performUndo, ACTION_TYPES } from "../storage/log.js";
+import { duplicateExtras } from "../engine/libraryTools.js";
 import { VirtualList } from "./virtual-list.js";
 import { h, icon, button, mount, spinner, plural, sleep, downloadText, toCsv } from "./dom.js";
 import { confirmDialog, openDialog, errorDialog, toast } from "./dialogs.js";
@@ -205,6 +206,7 @@ function renderDetailShell() {
       h(
         "div",
         { class: "detail-tools" },
+        isLiked ? null : button("Find duplicates", { kind: "ghost", iconName: "search", title: "Select the extra copies of songs that are in this playlist more than once", onClick: selectDuplicates }),
         button("Save a copy", { kind: "ghost", iconName: "save", title: "Download this list as a spreadsheet file (CSV) — a backup you can keep", onClick: exportCsv }),
         button("Reload", { kind: "ghost", iconName: "refresh", title: "Get the latest from YouTube Music", onClick: loadTracks })
       )
@@ -652,6 +654,22 @@ async function doMove() {
     `Moved ${plural(tracks.length, "song")} to "${destination.title}".` + (skipped ? ` (${skipped} ${skipped === 1 ? "was" : "were"} already there.)` : ""),
     record
   );
+}
+
+function selectDuplicates() {
+  if (!state) return;
+  const ordered = [...state.tracks].sort((a, b) => a._fetchIndex - b._fetchIndex);
+  const extras = duplicateExtras(ordered);
+  if (!extras.length) {
+    toast("No duplicates — every song is in this playlist only once.", { tone: "success" });
+    return;
+  }
+  // Clear the search so every selected copy is visible.
+  if (filterText.trim()) clearSearch();
+  selection = new Set(extras.map(rowKey));
+  if (vlist) vlist.refresh();
+  updateSelectionUI();
+  toast(`Selected ${plural(extras.length, "extra copy", "extra copies")}. The first copy of each song stays. Press "Remove from playlist" to delete the extras.`, { duration: 10000 });
 }
 
 function exportCsv() {

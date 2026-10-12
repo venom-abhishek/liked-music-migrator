@@ -90,12 +90,17 @@
       const h = [...q].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 1000003, 3);
       const bucket = h % 10; // 0-6 clear match, 7-8 close, 9 nothing
       if (bucket === 9) return ok({ contents: { tabbedSearchResultsRenderer: { tabs: [{ tabRenderer: { content: { sectionListRenderer: { contents: [] } } } }] } } });
-      const title = q.split(" ").slice(0, 2).join(" ");
-      const artist = q.split(" ").slice(2).join(" ").split(",")[0];
+      // Fake titles are two words, optionally followed by "(Acoustic)".
+      const m = /^(\S+ \S+(?: \([^)]*\))?) (.*)$/.exec(q) || [q, q, ""];
+      const title = m[1];
+      const artist = m[2].split(",")[0];
       // "close" results: right artist, only half the title matches — the
       // matcher routes those to "Please check" rather than auto-adding.
-      const t = { videoId: `yt${h}`, title: bucket >= 7 ? `${title.split(" ")[0]} Reprise Version` : title, artist, album: "Album", duration: "" };
-      return ok({ contents: { tabbedSearchResultsRenderer: { tabs: [{ tabRenderer: { content: { sectionListRenderer: { contents: [{ musicShelfRenderer: { title: { runs: [{ text: "Songs" }] }, contents: [row(t, true)] } }] } } } }] } } });
+      const t = { videoId: `yt${h}`, title: bucket >= 7 ? `${title.split(" ")[0]} Reprise Version` : bucket === 5 && !title.includes("(") ? `${title} (Live)` : title, artist, album: "Album", duration: "" };
+      const rows = [row(t, true)];
+      // Every so often a second, different song scores the same: shows the "pick one" case.
+      if (bucket === 6) rows.push(row({ ...t, videoId: `yt${h}b`, title: `${title} (From the Movie)`, album: "OST" }, true), row({ ...t, videoId: `yt${h}c`, title: `${title} Unplugged Duet` }, true));
+      return ok({ contents: { tabbedSearchResultsRenderer: { tabs: [{ tabRenderer: { content: { sectionListRenderer: { contents: [{ musicShelfRenderer: { title: { runs: [{ text: "Songs" }] }, contents: rows } }] } } } }] } } });
     }
     if (action === "addPlaylistItems") {
       const [pid, vids] = args;

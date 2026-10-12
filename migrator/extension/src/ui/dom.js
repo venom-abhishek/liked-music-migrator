@@ -118,8 +118,12 @@ export function downloadText(filename, text, mime = "text/csv") {
 
 export function toCsv(rows) {
   const cell = (v) => {
-    const s = v == null ? "" : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    let s = v == null ? "" : String(v);
+    // A cell starting with = + - @ is run as a formula by spreadsheet apps;
+    // a song called "=HYPERLINK(...)" must stay plain text (guard adapted
+    // from the 2026-10 ChatGPT review).
+    if (/^\s*[=+\-@]/.test(s)) s = `'${s}`;
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return "﻿" + rows.map((r) => r.map(cell).join(",")).join("\n");
 }

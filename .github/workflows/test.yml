@@ -15,3 +15,6 @@ jobs:
       - name: Run unit tests
         working-directory: migrator/extension
         run: npm test
+      - name: Syntax-check every file
+        working-directory: migrator/extension
+        run: npm run check

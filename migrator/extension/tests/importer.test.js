@@ -77,3 +77,58 @@ test("like-all mode flags each track as it's liked; errors don't stop the rest",
   assert.deepEqual(rec.tracks.map((t) => t.added), [true, false, true]);
   assert.equal(rec.status, STATUS.PARTIAL);
 });
+
+const JS = { kind: "jiosaavn", title: "JioSaavn" };
+const noLib = { likedTracks: [], playlists: [] };
+
+test("refuses entries that were neither clear matches nor ticked by the user, before any write", async () => {
+  const client = fakeYtClient({ LM: [] });
+  const unapproved = { song: { title: "T", artists: "A", collection_type: "liked" }, match: { decision: "REVIEW", chosen: { videoId: "v" } } };
+  await assert.rejects(commitImport(client, [unapproved], "liked", "", noLib, null, JS), /ticked/);
+  assert.deepEqual(client.calls, []);
+  const ticked = { ...unapproved, match: { ...unapproved.match, approved: true } };
+  const results = await commitImport(client, [ticked], "liked", "", noLib, null, JS);
+  assert.deepEqual(results.map((r) => r.outcome), ["added"]);
+});
+
+test("refuses to guess between two existing playlists with the same name, before any write", async () => {
+  const client = fakeYtClient({ P1: [], P2: [], LM: [] });
+  const lib = { likedTracks: [], playlists: [{ id: "P1", title: "Mix" }, { id: "P2", title: "Mix" }] };
+  await assert.rejects(commitImport(client, [entry("One", "A", "v1", "liked"), entry("Two", "B", "v2")], "mirror", "", lib, null, JS), /2 playlists called "Mix"/);
+  assert.deepEqual(client.calls, []);
+});
+
+test("songs that are already liked are skipped without any write", async () => {
+  const client = fakeYtClient({ LM: [{ videoId: "v1", title: "One" }] });
+  const results = await commitImport(client, [entry("One", "A", "v1")], "liked", "", { likedTracks: [{ videoId: "v1", title: "One", artistsDisplay: "A" }], playlists: [] }, null, JS);
+  assert.deepEqual(results.map((r) => r.outcome), ["already_present"]);
+  assert.deepEqual(client.calls, []);
+});
+
+test("101 playlist additions go in batches of 50, 50 and 1", async () => {
+  const client = fakeYtClient({});
+  const many = Array.from({ length: 101 }, (_, i) => entry(`Song ${i}`, "A", `v${i}`));
+  const results = await commitImport(client, many, "single", "Big", noLib, null, JS);
+  assert.deepEqual(client.calls.filter((c) => c[0] === "add").map((c) => c[2].length), [50, 50, 1]);
+  assert.equal(results.filter((r) => r.outcome === "added").length, 101);
+});
+
+test("an addition YouTube Music doesn't confirm is reported as a problem but kept on record for undo", async () => {
+  const client = fakeYtClient({});
+  const realAdd = client.addPlaylistItems;
+  client.addPlaylistItems = async (pid, ids) => {
+    const resp = await realAdd(pid, ids);
+    resp.playlistEditResults = resp.playlistEditResults.slice(0, 1); // only the first is confirmed
+    return resp;
+  };
+  const results = await commitImport(client, [entry("One", "A", "v1"), entry("Two", "B", "v2")], "single", "X", noLib, null, JS);
+  assert.deepEqual(results.map((r) => r.outcome), ["added", "error"]);
+  const [rec] = await listActions();
+  assert.deepEqual(rec.tracks.map((t) => [t.added, !!t.unconfirmed]), [[true, false], [true, true]]);
+});
+
+test("a song and its live version are not treated as the same song", async () => {
+  const client = fakeYtClient({ LM: [] });
+  const results = await commitImport(client, [entry("Yellow", "Coldplay", "v1"), entry("Yellow (Live)", "Coldplay", "v2")], "liked", "", noLib, null, JS);
+  assert.deepEqual(results.map((r) => r.outcome), ["added", "added"]);
+});

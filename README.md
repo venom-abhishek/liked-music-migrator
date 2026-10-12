@@ -58,13 +58,16 @@ The extension opens as its own tab with four sections:
   if it isn't) and links to the two main jobs.
 - **My music**: your playlists and Liked songs. Open one, search or sort,
   tick songs (shift-click selects a range), then **Move to…**, **Remove**
-  or **Un-like** from the bar at the bottom. Every change asks first and
+  or **Un-like** from the bar at the bottom. **Find duplicates** selects
+  the extra copies of songs that are in a playlist more than once. Every change asks first and
   shows an **Undo** button afterwards. **Save a copy** downloads the list
   as a spreadsheet file.
 - **Bring songs in**: a 5-step guide for copying songs from JioSaavn or
   Amazon Music. Nothing is written until the last step. You see which
   songs matched clearly, which need a quick check (with a **Listen**
-  button), and which weren't found. You then choose where they go.
+  button, and a choice between close options), and which weren't found. To
+  be safe, a different version (live, remix…) or a near-tie is never added
+  without your say-so. You then choose where they go.
 - **History**: every change in plain words, each with an **Undo** button.
 
 ## Honest caveats

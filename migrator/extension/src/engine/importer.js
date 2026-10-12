@@ -5,6 +5,7 @@
 // one-at-a-time with a sleep between each; batching is both faster and what
 // YT Music's own multi-select "add to playlist" does).
 
+import { AUTO } from "./matcher.js";
 import { songKey } from "./normalize.js";
 import { fetchAllTracks } from "./reconcile.js";
 import { playlistIdToBrowseId } from "../ytmusic/parsers.js";
@@ -13,7 +14,7 @@ import { startAction, saveAction, finishAction, ACTION_TYPES } from "../storage/
 // Playlist adds go in chunks rather than one call for the whole group, so a
 // very large import doesn't depend on one huge request being accepted, and
 // so progress is logged as each chunk lands.
-const ADD_CHUNK_SIZE = 100;
+const ADD_CHUNK_SIZE = 50;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -57,6 +58,15 @@ function toLogTrack(c) {
  * undoable record of exactly what did get written.
  */
 export async function commitImport(client, matched, mode, singlePlaylistName, existingLibrary, onProgress, sourceMeta, onRecord) {
+  // Checks before anything is written (the guard rails are ported from the
+  // 2026-10 ChatGPT review). An entry is writable if the matcher was sure
+  // (AUTO) or a person ticked it in the review screen (match.approved).
+  if (!["liked", "single", "mirror"].includes(mode)) throw new Error(`Unknown import mode: ${mode}`);
+  if (mode === "single" && !(singlePlaylistName || "").trim()) throw new Error("Please enter a name for the playlist.");
+  if (matched.some((e) => !e.match || !e.match.chosen || !e.match.chosen.videoId || !(e.match.decision === AUTO || e.match.approved))) {
+    throw new Error("Only matches that were found clearly, or that you ticked, can be added.");
+  }
+
   const source = {
     kind: (sourceMeta && sourceMeta.kind) || "import",
     id: "import",
@@ -73,6 +83,16 @@ export async function commitImport(client, matched, mode, singlePlaylistName, ex
     const key = destMeta.kind === "liked" ? "liked" : `playlist:${destMeta.name}`;
     if (!groups.has(key)) groups.set(key, { destMeta, entries: [] });
     groups.get(key).entries.push(item);
+  }
+
+  // Two existing playlists with the same name: there's no way to know which
+  // one is meant, so refuse before writing anything rather than guess.
+  for (const { destMeta } of groups.values()) {
+    if (destMeta.kind !== "playlist") continue;
+    const sameName = existingLibrary.playlists.filter((p) => p.title === destMeta.name).length;
+    if (sameName > 1) {
+      throw new Error(`You have ${sameName} playlists called "${destMeta.name}". Rename all but one in YouTube Music first, so the songs can't go into the wrong one.`);
+    }
   }
 
   for (const { destMeta, entries } of groups.values()) {
@@ -154,9 +174,19 @@ export async function commitImport(client, matched, mode, singlePlaylistName, ex
         }
         chunk.forEach((c, j) => {
           const logTrack = record.tracks[start + j];
+          const setVideoId = setVideoIdByVideoId[c.videoId] || null;
+          // Recorded as added either way, so undo will look for it and take
+          // it out if it is there (log.js looks up a missing item id). But
+          // without YouTube Music's confirmation it is reported as a problem,
+          // not as a success.
           logTrack.added = true;
-          logTrack.setVideoId = setVideoIdByVideoId[c.videoId] || null;
-          results.push({ song: c.song, outcome: "added" });
+          logTrack.setVideoId = setVideoId;
+          if (setVideoId) {
+            results.push({ song: c.song, outcome: "added" });
+          } else {
+            logTrack.unconfirmed = true;
+            results.push({ song: c.song, outcome: "error", error: "YouTube Music didn't confirm this one. Check the playlist; running the import again adds it if it's missing." });
+          }
         });
         await saveAction(record);
       }

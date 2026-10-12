@@ -70,7 +70,12 @@ export function decodeHtmlEntities(s) {
   return decodeEl.value;
 }
 
-/** Song.key() port: normalized identity used for dedup/comparison. */
+/**
+ * Song.key() port: normalized identity used for dedup/comparison. The
+ * version tag is part of it, because normalizeTitle strips brackets — without
+ * it "Song" and "Song (Live)" would count as the same song, and importing the
+ * studio version would be skipped as "already present" if the live one was.
+ */
 export function songKey(title, artists) {
-  return `${normalizeTitle(title)}|${normalizeArtist(artists)}`;
+  return `${normalizeTitle(title)}|${normalizeArtist(artists)}|${detectVersionTag(title)}`;
 }

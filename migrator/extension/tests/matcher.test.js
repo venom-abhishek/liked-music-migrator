@@ -59,3 +59,43 @@ test("no results is NOT_FOUND", async () => {
   assert.equal(m.decision, NOT_FOUND);
   assert.equal(m.reason, "no_results");
 });
+
+test("a live version of a studio song is never auto-added", async () => {
+  const m = await matchSong(src("Yellow", "Coldplay", 266), searchClient([{ videoId: "v", title: "Yellow (Live)", artist: "Coldplay", duration: "4:26" }]));
+  assert.equal(m.decision, REVIEW);
+  assert.equal(m.reason, "version_mismatch");
+});
+
+test("a remastered release of the same recording still auto-matches", async () => {
+  const m = await matchSong(src("Yellow", "Coldplay", 266), searchClient([{ videoId: "v", title: "Yellow (Remastered 2021)", artist: "Coldplay", duration: "4:26" }]));
+  assert.equal(m.decision, AUTO);
+});
+
+test("the same song listed twice (album + single) still auto-matches", async () => {
+  const m = await matchSong(
+    src("Tum Hi Ho", "Arijit Singh", 262),
+    searchClient([
+      { videoId: "v1", title: "Tum Hi Ho", artist: "Arijit Singh", duration: "4:22" },
+      { videoId: "v2", title: "Tum Hi Ho", artist: "Arijit Singh", duration: "4:21" },
+    ])
+  );
+  assert.equal(m.decision, AUTO);
+});
+
+test("two different songs scoring almost the same go to REVIEW, with both offered", async () => {
+  const m = await matchSong(
+    src("Tum Hi Ho", "Arijit Singh", 262),
+    searchClient([
+      { videoId: "v1", title: "Tum Hi Ho", artist: "Arijit Singh", duration: "4:22" },
+      { videoId: "v2", title: "Tum Hi Ho Reprise", artist: "Arijit Singh", duration: "4:22" },
+    ])
+  );
+  assert.equal(m.decision, REVIEW);
+  assert.equal(m.reason, "ambiguous_candidates");
+  assert.deepEqual(m.candidates.map((c) => c.videoId).sort(), ["v1", "v2"]);
+});
+
+test("the shown score is capped at 100", async () => {
+  const m = await matchSong(src("Tum Hi Ho", "Arijit Singh", 262), searchClient([{ videoId: "v", title: "Tum Hi Ho", artist: "Arijit Singh", duration: "4:22" }]));
+  assert.equal(m.chosen.combined, 100);
+});

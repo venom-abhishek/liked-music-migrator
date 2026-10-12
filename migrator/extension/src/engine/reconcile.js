@@ -35,7 +35,11 @@ export async function fetchAllTracks(client, browseId) {
   const tracks = contentData && contentData.contents ? parsePlaylistItems(contentData.contents) : [];
 
   let continuationToken = contentData ? getContinuationToken(contentData.contents) : null;
+  // A cursor seen twice would page forever; stop with a clear error instead.
+  const visited = new Set();
   while (continuationToken) {
+    if (visited.has(continuationToken)) throw new Error("YouTube Music repeated a page while loading this list. Reload and try again.");
+    visited.add(continuationToken);
     const resp = await client.browseContinuationBody(continuationToken);
     const continuationItems = nav(resp, CONTINUATION_ITEMS, true);
     if (!continuationItems || continuationItems.length === 0) break;
@@ -69,7 +73,10 @@ export async function fetchAllLibraryPlaylists(client) {
   const first = await client.browse("FEmusic_liked_playlists");
   let { playlists, continuationToken } = parseLibraryPlaylists(first);
 
+  const visited = new Set();
   while (continuationToken) {
+    if (visited.has(continuationToken)) throw new Error("YouTube Music repeated a page while loading your playlists. Reload and try again.");
+    visited.add(continuationToken);
     const resp = await client.browseContinuationUrl("FEmusic_liked_playlists", continuationToken);
     const page = parseLibraryPlaylistsContinuation(resp);
     if (page.playlists.length === 0) break;

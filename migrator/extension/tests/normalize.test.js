@@ -27,6 +27,8 @@ test("decodeHtmlEntities handles the entities JioSaavn actually sends", () => {
   assert.equal(decodeHtmlEntities("&unknown; stays"), "&unknown; stays");
 });
 
-test("songKey is the normalized title|artist pair", () => {
-  assert.equal(songKey("Hello (Remix)", "Adele"), "hello|adele");
+test("songKey is normalized title|artist|version, so studio and live versions differ", () => {
+  assert.equal(songKey("Hello (Remix)", "Adele"), "hello|adele|remix");
+  assert.notEqual(songKey("Yellow", "Coldplay"), songKey("Yellow (Live)", "Coldplay"));
+  assert.equal(songKey("तुम ही हो", "Arijit"), "तुम ही हो|arijit|");
 });

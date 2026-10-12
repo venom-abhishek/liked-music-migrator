@@ -1,6 +1,6 @@
 # Handover — liked-music-migrator browser extension
 
-**Last updated:** 2026-09-30
+**Last updated:** 2026-10-12
 **Written for:** a fresh Claude Code session picking this up with no memory of prior conversations. Read this file fully before doing anything else. It's self-contained.
 
 ## What this is
@@ -64,6 +64,37 @@ The operator said the old UI was nearly unusable for non-technical people, so th
   - `ping` in `sources/jiosaavn.js`.
   - An older loaded copy answers "Unknown action", which `connection.js` treats as connected.
 - **Preview without accounts:** `dev/fake-chrome.js` and `dev/preview.mjs` (see the README "Development" section). Use these to check any UI change before asking the operator.
+
+## ChatGPT's v0.2 work (2026-10-08), merged 2026-10-12
+
+Between sessions the operator had ChatGPT work on the project. Its push to GitHub was blocked, so it was handed over as a ZIP plus its own handoff document (`liked-music-migrator-developer-handoff.md`, not committed). It was built on old `master` (e515fc5, the pre-redesign UI), so it was ported by hand onto this branch, not merged.
+
+**Carried over:**
+- Matcher caution rules (`engine/matcher.js`). An otherwise-AUTO match goes to REVIEW when:
+  - `version_mismatch`: the best match is a different version (live, remix, acoustic, cover, sped-up, instrumental; *not* remaster/explicit, an adjustment made here),
+  - `video_fallback`: only found as a music video,
+  - `ambiguous_candidates`: a near-tie with a *different* song (adjusted here: the same song listed twice no longer triggers it),
+  - `missing_artist`: the source has no artist.
+- The shown score is capped at 100, while the raw score is kept for ranking. `candidates` are returned, and the review screen offers them in a picker, with each reason explained in plain words.
+- `songKey` includes the version tag, so "Song" and "Song (Live)" are different songs.
+- `reconcile.js` stops with an error on a repeated pagination cursor instead of looping forever.
+- Importer (`engine/importer.js`):
+  - refuses unknown modes, an empty playlist name, and entries that are neither AUTO nor ticked by the user (`match.approved`), before any write;
+  - refuses to guess between two existing playlists with the same name;
+  - adds in batches of 50;
+  - an addition YouTube Music doesn't confirm is reported as an error but still recorded (`unconfirmed: true`), so undo can find and remove it.
+- **Find duplicates** button in My music (`engine/libraryTools.js`): selects exact same-video extra copies and keeps the first.
+- CSV export neutralises cells that start with `= + - @` (spreadsheet formula injection).
+- `bridge.js` cleans up requests that never got an answer.
+- `npm run check` syntax-checks every file (also in CI).
+- ChatGPT's tests, adapted.
+
+**Not carried over, and why:**
+- Its UI changes to the old `app.js`: replaced by the redesign, which already covered them (hidden-view fix, mode picker placement, escaping, viewport, focus, busy states).
+- Split move records: this branch's write-ahead MOVE record with per-track flags is safer.
+- Refusing undo when a playlist item id is missing: this branch looks the id up instead.
+- Saved previews in `chrome.storage`: its own handoff lists quota and staleness problems. If wanted, redo it on IndexedDB.
+- JSON backup restore, and "select all by artist": possible follow-ups.
 
 ## Needs a live check by the operator (not verifiable from here)
 

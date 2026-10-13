@@ -40,10 +40,22 @@ error" dialog. This was tried extensively and dropped on the spec author's direc
   against real data: `primaryText` = title; `secondaryText1/2/3` = artist / album / duration; track id is
   the `trackAsin` query parameter of `primaryLink.deeplink` (not the row's own `id`).
 
+**2026-10-13: three independent ways in.**
+1. Network capture, as above.
+2. **Reading the page's own rows** (`scanDom` in `amazon-inject.js`):
+   - It runs on every auto-scroll step, because the list is virtualised.
+   - It walks the DOM including open shadow roots and takes any element with a `primary-text` attribute or `primaryText` property that also has a duration or a `trackAsin` link. It reads `secondary-text-1/2/3` as artist / album / duration, the same field mapping as the Skyfire JSON.
+   - It matches on field names, not element names, and runs in the MAIN world, so component properties are visible as well as attributes.
+   - The list's name comes from a `headline` attribute.
+   - The two readings are merged by track id, falling back to title + artist (`mergeAmazonReadings`). Either one alone is enough.
+   - This was tested against a stand-in page built from web components with shadow roots, an inner scroll panel and a virtualised list (60/60 rows). It has **not** yet been checked against the real Amazon page; the component attribute names are the unverified assumption.
+3. **"A list of songs"** (`engine/listImport.js`): paste text copied off the Amazon playlist page (Ctrl+A, Ctrl+C), or a CSV from an export tool. This needs nothing from Amazon's internals at all.
+
+The wizard now **reloads the Amazon tab itself** before reading, waits for rows to appear, and lets the user **read several lists one after another** before matching. Each list keeps its name, so "keep the same lists" mode recreates them.
+
 **Operating notes / known limits**
-- Navigate the Amazon tab to the playlist (or Library → Songs), **reload it**, wait for songs to appear,
-  then click Capture. The reload guarantees that the first batch arrives while that page's URL is current.
-  With in-app navigation, Amazon may fetch before it updates the URL.
+- Navigate the Amazon tab to the playlist (or Library → Songs), then press "Read the songs from Amazon". The
+  extension reloads the tab itself, which guarantees the first batch arrives while that page's URL is current.
 - Verified live on a 37-track playlist (single response; extracted fields matched the screen exactly). A
   playlist large enough to need several continuation fetches has **not** been verified live yet. If a big
   import comes up short, look first at the scroll loop (`autoScrollAndCapture`) and the scroller detection

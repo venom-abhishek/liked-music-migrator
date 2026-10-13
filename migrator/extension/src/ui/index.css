@@ -705,3 +705,17 @@ input.visually-hidden:focus-visible + .drop-zone { outline: 3px solid var(--acce
 .option-stack { display: grid; gap: 0.6rem; margin-top: 0.75rem; }
 .choice-card.compact { padding: 0.9rem 1rem; border-width: 1px; border-radius: var(--radius); }
 .choice-card.compact strong { font-size: 1rem; }
+
+/* "A list of songs" */
+.list-input { min-height: 200px; resize: vertical; font-family: inherit; line-height: 1.45; }
+.list-actions { margin: 0.6rem 0 0; }
+.list-actions label.btn { cursor: pointer; }
+.list-preview { margin-top: 1.25rem; display: grid; gap: 0.6rem; }
+.howto-box { margin: 0.5rem 0 1rem; padding: 0.75rem 1rem; background: var(--surface-2); border-radius: var(--radius-sm); }
+.howto-box summary { cursor: pointer; font-weight: 650; color: var(--accent); }
+.howto-box ul { margin: 0.6rem 0 0.2rem; padding-left: 1.2rem; }
+.howto-box li { margin: 0.35rem 0; }
+kbd { font: inherit; font-size: 0.85em; padding: 0.05rem 0.4rem; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 5px; background: var(--surface); }
+.service-logo.list { background: linear-gradient(135deg, #f59e0b, #ea580c); }
+.choice-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 760px) { .choice-grid { grid-template-columns: 1fr; } }

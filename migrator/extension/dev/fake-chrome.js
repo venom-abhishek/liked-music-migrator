@@ -138,6 +138,13 @@
     if (action === "getPageInfo") return { ok: true, url: "https://music.amazon.in/user-playlists/abc", title: "Gym Mix | Amazon Music" };
     if (action === "scrollStep") { await wait(80); return { ok: true, scrollHeightBefore: 100, scrollHeightAfter: 100, atBottom: true }; }
     if (action === "countCaptures") return { ok: true, count: 1 };
+    if (action === "scanDom") return { ok: true, count: 22 };
+    if (action === "getDomRows") {
+      // The page reading finds the same 22 plus one the network data missed.
+      const rows = Array.from({ length: 22 }, (_, i) => { const s = song(7000 + i); return { asin: `B0T${i}`, title: s.title, artist: s.artist, album: s.album, duration: s.duration }; });
+      rows.push({ asin: "B0EXTRA", title: "Raat Baarish", artist: "Anuv Jain", album: "Single", duration: "3:10" });
+      return { ok: true, rows, heading: "Gym Mix" };
+    }
     if (action === "getCaptures") {
       const rows = Array.from({ length: 22 }, (_, i) => { const s = song(7000 + i); return { interface: "X.VisualRowItemElement", primaryText: s.title, secondaryText1: s.artist, secondaryText2: s.album, secondaryText3: s.duration, primaryLink: { deeplink: `/albums/B0X?trackAsin=B0T${i}` } }; });
       return { ok: true, captures: [{ body: JSON.stringify({ rows }) }] };
@@ -166,6 +173,7 @@
       create: async (o) => { window.__calls.push(["tabs.create", o.url]); return { id: 99 }; },
       update: async () => ({}),
       reload: async () => { window.__calls.push(["tabs.reload"]); },
+      get: async (id) => tabs.find((t) => t.id === id) || null,
     },
     windows: { update: async () => ({}) },
   };

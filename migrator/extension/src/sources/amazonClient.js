@@ -31,6 +31,8 @@ export function makeAmazonClient(tabId) {
   if (!tabId) throw new AmazonNotFoundError("No open Amazon Music tab.");
   return {
     getCaptures: (opts) => call(tabId, "getCaptures", [opts || {}]).then((r) => r.captures || []),
+    scanDom: () => call(tabId, "scanDom").then((r) => r.count || 0),
+    getDomRows: () => call(tabId, "getDomRows").then((r) => ({ rows: r.rows || [], heading: r.heading || null })),
     countCaptures: () => call(tabId, "countCaptures").then((r) => r.count || 0),
     clearCaptures: () => call(tabId, "clearCaptures"),
     scrollStep: (pxPerStep, waitMs) => call(tabId, "scrollStep", [pxPerStep, waitMs]),

@@ -1,6 +1,6 @@
 # Handover — liked-music-migrator browser extension
 
-**Last updated:** 2026-10-12
+**Last updated:** 2026-10-13
 **Written for:** a fresh Claude Code session picking this up with no memory of prior conversations. Read this file fully before doing anything else. It's self-contained.
 
 ## What this is
@@ -106,6 +106,20 @@ Between sessions the operator had ChatGPT work on the project. Its push to GitHu
 - Split move records: this branch's write-ahead MOVE record with per-track flags is safer.
 - Refusing undo when a playlist item id is missing: this branch looks the id up instead.
 - Its chrome.storage saved previews and JSON report: replaced by the IndexedDB draft and the CSV report above.
+
+## Amazon made robust (2026-10-13, v0.4.0)
+
+Amazon now has three independent ways in, so one breaking doesn't stop an import:
+1. Network capture.
+2. Reading the page's own rows.
+3. The new "A list of songs" source, which also works for any other app.
+
+The wizard also reloads the Amazon tab itself and can read several lists before matching. Details are in `PHASE3_AMAZON_DISCOVERY.md` §0. Amazon was **not** reachable from the development environment, so none of this has run against the real Amazon page yet. The first live test should note which reading found the songs: `readAmazonPage` returns `fromNetwork` and `fromPage`.
+
+`engine/listImport.js` reads three kinds of input:
+- CSV/TSV with a header. Column names from TuneMyMusic, Soundiiz and Exportify are recognised, and a playlist column keeps lists apart. A list named like "Liked Songs" goes to Liked.
+- "Title - Artist" lines.
+- Text copied off a web page, where each song is a block ending in its duration.
 
 ## Needs a live check by the operator (not verifiable from here)
 

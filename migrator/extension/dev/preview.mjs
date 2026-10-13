@@ -212,9 +212,30 @@ await page.waitForSelector(".howto");
 await page.waitForTimeout(300);
 await snap(page, "amazon-3-instructions", true);
 await clickText(page, "Read the songs from Amazon");
+await page.waitForSelector(".wizard-nav >> text=Read another list");
+const foundTitle = await page.textContent(".wizard-body h2");
+if (!/Found 23 songs in "Gym Mix"/.test(foundTitle)) errors.push(`amazon found: ${foundTitle}`);
+await snap(page, "amazon-3b-found");
+await clickText(page, "Find 23 songs");
 await page.waitForSelector(".stat-grid", { timeout: 60000 });
 await clickText(page, "Continue with");
 await snap(page, "amazon-6-destination");
+await page.close();
+
+// ---- A list of songs (any app) ----
+page = await open({ name: "list" }, { hash: "#import" });
+await page.locator(".choice-card", { hasText: "A list of songs" }).click();
+await page.waitForSelector(".conn-card.tone-success");
+await clickText(page, "Continue");
+await page.waitForSelector(".list-input");
+const copied = ["Gym Mix", "Playlist", "Play", "1", "Tum Hi Ho", "Arijit Singh", "Aashiqui 2", "4:22", "2", "Yellow", "Coldplay", "Parachutes", "4:26", "3", "Blinding Lights", "E", "The Weeknd", "After Hours", "3:20"].join("\n");
+await page.fill(".list-input", copied);
+await page.fill('input[aria-label="Name for this list"]', "Gym Mix");
+await clickText(page, "Read the list");
+await page.waitForSelector(".list-preview");
+await snap(page, "list-3-preview", true);
+await clickText(page, "Find 3 songs");
+await page.waitForSelector(".stat-grid", { timeout: 60000 });
 await page.close();
 
 // ---- Problems ----

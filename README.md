@@ -6,7 +6,7 @@ liked songs / playlists into it from other services (**JioSaavn** and
 No servers, no accounts to create, no paid services, and **no AI/LLM calls at
 runtime**: matching is deterministic string+duration logic.
 
-> **Status: Phases 0-3 complete, Phase 4 mostly done (v0.3).** The
+> **Status: Phases 0-3 complete, Phase 4 mostly done (v0.4).** The
 > manager works for YouTube Music (list, sort/filter/select, remove/un-like/
 > move, undo), and both JioSaavn and Amazon Music can be extracted, matched,
 > and imported (Like all / single playlist / mirror playlists), with a
@@ -74,7 +74,10 @@ The extension opens as its own tab with four sections:
   as a **backup file** (which can be brought back in later) or a
   spreadsheet.
 - **Bring songs in**: a 5-step guide for copying songs from JioSaavn,
-  Amazon Music, or a Music Mover **backup file**. Nothing is written until the last step. You see which
+  Amazon Music, **a list of songs** (pasted, or a spreadsheet from any app),
+  or a Music Mover **backup file**. Amazon is read two ways at once (its
+  own data and the songs shown on the page), and several Amazon lists can
+  be read one after another. Nothing is written until the last step. You see which
   songs matched clearly, which need a quick check (with a **Listen**
   button, and a choice between close options), and which weren't found. To
   be safe, a different version (live, remix…) or a near-tie is never added

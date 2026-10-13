@@ -12,7 +12,7 @@
 // deeplink's trackAsin param rather than the row's own `id`) is confirmed
 // against a real captured showLibraryPlaylist response, not guessed.
 
-import { decodeHtmlEntities, detectVersionTag } from "./normalize.js";
+import { decodeHtmlEntities, detectVersionTag, songKey } from "./normalize.js";
 
 const ROW_ITEM_INTERFACE = /VisualRowItemElement|VisualTwoLine\w*ListItem|ListItemElement/i;
 
@@ -89,8 +89,11 @@ function parseCapturedBody(bodyText) {
 export async function autoScrollAndCapture(client, opts = {}) {
   const { maxSteps = 200, stableStop = 3, pxPerStep = 1600, waitMs = 900, onProgress } = opts;
   let stableCount = 0;
+  // Read the rows already on screen before scrolling moves them away.
+  if (client.scanDom) await client.scanDom();
   for (let i = 0; i < maxSteps; i++) {
     const { scrollHeightBefore, scrollHeightAfter, atBottom } = await client.scrollStep(pxPerStep, waitMs);
+    if (client.scanDom) await client.scanDom();
     const captured = await client.countCaptures();
     onProgress?.(`Scrolling the Amazon tab (step ${i + 1}) — ${captured} response(s) with track data so far…`);
     if (scrollHeightAfter <= scrollHeightBefore) {
@@ -126,4 +129,60 @@ export function extractSongsFromCaptures(captures, collectionType, collectionNam
     duration_sec: item.duration_sec,
     version_tag: item.version_tag,
   }));
+}
+
+/** Song-shape objects from rows read off the page (amazon-inject.js scanDom). */
+export function songsFromDomRows(rows, collectionType, collectionName) {
+  return rows.map((r) => ({
+    source: "amazon",
+    collection_type: collectionType,
+    collection_name: collectionName,
+    source_id: r.asin || "",
+    title: decodeHtmlEntities(r.title || ""),
+    artists: decodeHtmlEntities(r.artist || ""),
+    album: decodeHtmlEntities(r.album || ""),
+    duration_sec: parseDuration(r.duration),
+    version_tag: detectVersionTag(r.title || ""),
+  }));
+}
+
+/**
+ * Combines the two independent readings of one Amazon page: songs from the
+ * captured network responses, and songs read off the page's rows. Each song
+ * appears once (matched by Amazon track id, else by title + artist), in the
+ * order the network data had them, then any the page reading found extra.
+ * Returns { songs, fromNetwork, fromPage, onlyOnPage }.
+ */
+export function mergeAmazonReadings(networkSongs, pageSongs) {
+  const keyOf = (s) => (s.source_id ? `asin:${s.source_id}` : `key:${songKey(s.title, s.artists)}`);
+  const seen = new Set();
+  const seenKeys = new Set();
+  const songs = [];
+  for (const s of networkSongs) {
+    if (seen.has(keyOf(s))) continue;
+    seen.add(keyOf(s));
+    seenKeys.add(songKey(s.title, s.artists));
+    songs.push(s);
+  }
+  let onlyOnPage = 0;
+  for (const s of pageSongs) {
+    if (seen.has(keyOf(s)) || seenKeys.has(songKey(s.title, s.artists))) continue;
+    seen.add(keyOf(s));
+    seenKeys.add(songKey(s.title, s.artists));
+    songs.push(s);
+    onlyOnPage++;
+  }
+  return { songs, fromNetwork: networkSongs.length, fromPage: pageSongs.length, onlyOnPage };
+}
+
+/**
+ * Reads the Amazon page that's open in `client`'s tab, both ways, and
+ * returns { songs, heading, fromNetwork, fromPage, onlyOnPage }.
+ */
+export async function readAmazonPage(client, { collectionType, collectionName, onProgress } = {}) {
+  const captures = await autoScrollAndCapture(client, { onProgress });
+  const { rows, heading } = client.getDomRows ? await client.getDomRows() : { rows: [], heading: null };
+  const name = collectionName || heading || "Amazon Music";
+  const merged = mergeAmazonReadings(extractSongsFromCaptures(captures, collectionType, name), songsFromDomRows(rows, collectionType, name));
+  return { ...merged, heading, captures: captures.length };
 }

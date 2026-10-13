@@ -12,7 +12,8 @@ import { fetchAllTracks, fetchAllLibraryPlaylists } from "../engine/reconcile.js
 import { makeJioSaavnClient } from "../sources/jiosaavnClient.js";
 import { getJioSaavnInventory, extractJioSaavnSongs } from "../engine/jiosaavnExtract.js";
 import { findAmazonTab, makeAmazonClient } from "../sources/amazonClient.js";
-import { autoScrollAndCapture, extractSongsFromCaptures } from "../engine/amazonExtract.js";
+import { readAmazonPage } from "../engine/amazonExtract.js";
+import { parseSongList } from "../engine/listImport.js";
 import { matchSong, AUTO, REVIEW, NOT_FOUND } from "../engine/matcher.js";
 import { commitImport } from "../engine/importer.js";
 import { performUndo } from "../storage/log.js";
@@ -42,12 +43,13 @@ const PAGE = 150; // rows rendered per list before "Show more"
 const SOURCES = {
   jiosaavn: { key: "jiosaavn", name: "JioSaavn", title: "JioSaavn", onLabel: "On JioSaavn", logText: "JioSaavn", blurb: "Your liked songs and playlists" },
   amazon: { key: "amazon", name: "Amazon Music", title: "Amazon Music", onLabel: "On Amazon Music", logText: "Amazon Music", blurb: "One playlist or song list at a time", beta: true },
+  list: { key: "list", name: "your list", title: "A list of songs", onLabel: "In your list", logText: "a song list", blurb: "Paste a list, or upload a spreadsheet from any app", iconName: "list" },
   backup: { key: "backup", name: "your backup", title: "A backup file", onLabel: "In your backup", logText: "a backup", blurb: "Bring back a playlist you saved with \"Save a copy\"", iconName: "save" },
 };
 const MAX_BACKUP_BYTES = 20 * 1024 * 1024;
 
 const STEPS = ["Choose app", "Connect", "Pick songs", "Check matches", "Add"];
-const STEP_OF = { source: 0, connect: 1, choose: 2, reading: 2, matching: 3, review: 3, destination: 4, adding: 4, done: 4 };
+const STEP_OF = { source: 0, connect: 1, choose: 2, reading: 2, amazonFound: 2, matching: 3, review: 3, destination: 4, adding: 4, done: 4 };
 
 let root = null;
 let w = null; // wizard state
@@ -63,6 +65,10 @@ function freshState() {
     amazonName: "",
     amazonIsLiked: false,
     backup: null, // { title, kind, exportedAt, songs, fileName }
+    amazonLists: [], // lists read so far: [{ name, isLiked, songs, fromNetwork, fromPage }]
+    listText: "",
+    listName: "",
+    list: null, // parsed: { format, songs, collections }
     songs: [],
     matches: [], // [{ song, match, include }]
     warnings: [],
@@ -114,6 +120,7 @@ function saveDraftSoon() {
       amazonName: w.amazonName,
       amazonIsLiked: w.amazonIsLiked,
       backupTitle: w.backup && w.backup.title,
+      amazonLists: w.amazonLists.map((l) => ({ name: l.name, isLiked: l.isLiked, count: l.songs.length })),
       mode: w.mode,
       playlistName: w.playlistName,
     }).catch((err) => console.warn("Couldn't save the unfinished import:", err));
@@ -125,6 +132,7 @@ async function resumeDraft(d) {
   w.source = SOURCES[d.sourceKey];
   Object.assign(w, { songs: d.songs, matches: d.matches, warnings: d.warnings || [], amazonName: d.amazonName || "", amazonIsLiked: !!d.amazonIsLiked, mode: d.mode || null, playlistName: d.playlistName || "" });
   if (d.backupTitle) w.backup = { title: d.backupTitle };
+  if (d.amazonLists) w.amazonLists = d.amazonLists.map((l) => ({ ...l, songs: [] }));
   const remaining = w.matches.map((m, i) => (m.match ? -1 : i)).filter((i) => i >= 0);
   if (remaining.length) await runMatching(remaining);
   else go("review");
@@ -132,7 +140,7 @@ async function resumeDraft(d) {
 
 function render() {
   saveDraftSoon();
-  const screens = { source, connect, choose, reading, matching, review, destination, adding, done };
+  const screens = { source, connect, choose, reading, amazonFound, matching, review, destination, adding, done };
   mount(root, pageHeader("Bring songs in", "Copy your songs from another music app into YouTube Music."), stepper(), h("div", { class: "wizard-body" }, screens[w.step]()));
 }
 
@@ -190,7 +198,7 @@ function source() {
     {},
     resumeBanner(),
     h("h2", {}, "Where are your songs now?"),
-    h("div", { class: "choice-grid" }, card(SOURCES.jiosaavn), card(SOURCES.amazon), card(SOURCES.backup)),
+    h("div", { class: "choice-grid" }, card(SOURCES.jiosaavn), card(SOURCES.amazon), card(SOURCES.list), card(SOURCES.backup)),
     h(
       "p",
       { class: "muted small reassure" },
@@ -247,9 +255,9 @@ function connect() {
   const states = {};
   const update = (key) => (state) => {
     states[key] = state;
-    next.disabled = !(states.youtube === "ok" && (s.key === "backup" || states[s.key] === "ok"));
+    next.disabled = !(states.youtube === "ok" && (s.key === "backup" || s.key === "list" || states[s.key] === "ok"));
   };
-  if (s.key === "backup") {
+  if (s.key === "backup" || s.key === "list") {
     return h(
       "div",
       {},
@@ -274,6 +282,7 @@ function connect() {
 
 function choose() {
   if (w.source.key === "backup") return chooseBackup();
+  if (w.source.key === "list") return chooseList();
   return w.source.key === "jiosaavn" ? chooseJioSaavn() : chooseAmazon();
 }
 
@@ -429,45 +438,30 @@ async function startJioSaavn() {
 }
 
 function chooseAmazon() {
-  const nameInput = h("input", { type: "text", class: "input", value: w.amazonName, placeholder: "e.g. My Amazon favourites", oninput: (e) => (w.amazonName = e.target.value) });
+  // Left empty, the name shown on the Amazon page is used.
+  const nameInput = h("input", { type: "text", class: "input", value: w.amazonName, placeholder: "Leave empty to use the name shown on Amazon", oninput: (e) => (w.amazonName = e.target.value) });
   const likedBox = h("input", { type: "checkbox", class: "check", checked: w.amazonIsLiked, onchange: (e) => (w.amazonIsLiked = e.target.checked) });
-
-  // Prefill the name from the Amazon tab's page title.
-  if (!w.amazonName) {
-    findAmazonTab().then((tab) => {
-      if (!tab || w.amazonName) return;
-      const guess = (tab.title || "").replace(/\s*[|\-–]\s*Amazon Music.*$/i, "").trim();
-      if (guess && !/^amazon music$/i.test(guess)) {
-        w.amazonName = guess;
-        nameInput.value = guess;
-      }
-    });
-  }
-
-  const reloadBtn = button("Reload the Amazon tab for me", {
-    kind: "secondary",
-    iconName: "refresh",
-    onClick: async () => {
-      const tab = await findAmazonTab();
-      if (tab) {
-        await reloadTab(tab);
-        toast("Reloaded. Wait until you see your songs in the Amazon tab, then continue.", { tone: "success" });
-      }
-    },
-  });
-  const showBtn = button("Show me the Amazon tab", { kind: "ghost", iconName: "external", onClick: async () => { const tab = await findAmazonTab(); if (tab) focusTab(tab); } });
+  const showBtn = button("Show me the Amazon tab", { kind: "secondary", size: "sm", iconName: "external", onClick: async () => { const tab = await findAmazonTab(); if (tab) focusTab(tab); } });
 
   return h(
     "div",
     {},
-    h("h2", {}, "Which Amazon songs should we bring over?"),
+    w.amazonLists.length
+      ? h(
+          "div",
+          { class: "resume-card" },
+          h("div", { class: "conn-icon" }, icon("checkCircle")),
+          h("div", { class: "grow" }, h("strong", {}, `Already read: ${w.amazonLists.map((l) => l.name).join(", ")}`), h("div", { class: "muted small" }, `${plural(w.amazonLists.reduce((n, l) => n + l.songs.length, 0), "song")} so far`)),
+          button("Go on with these", { kind: "secondary", iconName: "forward", onClick: () => go("amazonFound") })
+        )
+      : null,
+    h("h2", {}, w.amazonLists.length ? "Which Amazon list next?" : "Which Amazon songs should we bring over?"),
     h("p", { class: "muted" }, "Amazon Music is done one list at a time: whichever playlist (or song list) is open in the Amazon tab is the one that gets copied."),
     h(
       "ol",
       { class: "howto" },
-      h("li", {}, h("strong", {}, "In the Amazon Music tab, open the playlist you want to copy"), " — or go to Library → Songs for all your songs.", h("div", { class: "howto-actions" }, showBtn)),
-      h("li", {}, h("strong", {}, "Reload that tab"), " so we can see the songs from the start.", h("div", { class: "howto-actions" }, reloadBtn)),
-      h("li", {}, h("strong", {}, "Wait until the songs appear"), " in the Amazon tab, then come back here.")
+      h("li", {}, h("strong", {}, "In the Amazon Music tab, open the playlist you want to copy"), " — your Liked Songs, any playlist, or Library → Songs for everything.", h("div", { class: "howto-actions" }, showBtn)),
+      h("li", {}, h("strong", {}, "Come back here and press \"Read the songs from Amazon\"."), " We reload that tab and scroll through the whole list by ourselves — just leave it alone for a moment.")
     ),
     h("label", { class: "field-label" }, "What's this list called?"),
     nameInput,
@@ -483,39 +477,222 @@ async function startAmazon() {
     errorDialog(new Error("Couldn't reach the Amazon Music tab"), { title: "Amazon Music isn't open" });
     return;
   }
-  w.busy = { text: "Scrolling through the Amazon page to see every song…", sub: "Please don't use the Amazon tab while this runs." };
+  w.busy = { text: "Reading the songs from the Amazon page…", sub: "Reloading the Amazon tab so we see the list from the start…" };
   go("reading");
   try {
+    // Reload first: the list's first batch of songs only arrives while the
+    // page loads, and reading only works for what arrived since the
+    // extension started. (This used to be a step the user had to remember.)
+    await reloadAndWait(tab.id, (text) => {
+      w.busy.sub = text;
+      const el = root.querySelector(".busy-sub");
+      if (el) el.textContent = text;
+    });
     const amazon = makeAmazonClient(tab.id);
-    const captures = await autoScrollAndCapture(amazon, {
+    const r = await readAmazonPage(amazon, {
+      collectionType: w.amazonIsLiked ? "liked" : "playlist",
+      collectionName: w.amazonName.trim() || null,
       onProgress: (text) => {
         w.busy.sub = text.replace(/^Scrolling the Amazon tab \(step (\d+)\) — /, "Step $1 — ");
         const el = root.querySelector(".busy-sub");
         if (el) el.textContent = w.busy.sub;
       },
     });
-    const name = w.amazonName.trim() || "Amazon Music";
-    w.songs = extractSongsFromCaptures(captures, w.amazonIsLiked ? "liked" : "playlist", name);
-    w.warnings = [];
-    if (w.songs.length === 0) {
+    if (r.songs.length === 0) {
       go("choose");
       infoDialog({
         title: "We didn't find any songs on that page",
         iconName: "alert",
         tone: "danger",
         message:
-          captures.length === 0
-            ? "Make sure the Amazon tab is showing the playlist or song list you want, reload that tab, wait for the songs to appear, then try again."
-            : "The Amazon page loaded, but its songs weren't in a form we recognise. Amazon may have changed their website — this part may need an update.",
+          "Make sure the Amazon tab is showing the playlist or song list you want (with its songs visible), then try again.\n\n" +
+          "If it still finds nothing, Amazon may have changed their website. You can still bring the songs in: go back, choose \"A list of songs\", and paste the playlist copied from the Amazon page.",
       });
       return;
     }
-    toast(`Found ${plural(w.songs.length, "song")} on the Amazon page.`, { tone: "success" });
-    await runMatching();
+    const name = w.amazonName.trim() || r.heading || "Amazon Music";
+    const already = w.amazonLists.findIndex((l) => l.name === name);
+    const entry = { name, isLiked: w.amazonIsLiked, songs: r.songs.map((s) => ({ ...s, collection_name: name })), fromNetwork: r.fromNetwork, fromPage: r.fromPage };
+    if (already >= 0) w.amazonLists[already] = entry; // same list read again: keep the newer reading
+    else w.amazonLists.push(entry);
+    go("amazonFound");
   } catch (err) {
     go("choose");
     errorDialog(err, { title: "Couldn't read the songs from Amazon" });
   }
+}
+
+/** Reloads the Amazon tab and waits until it has loaded and shows song rows. */
+async function reloadAndWait(tabId, onProgress) {
+  await chrome.tabs.reload(tabId);
+  const until = Date.now() + 45000;
+  // 1. The page itself finishes loading.
+  await sleep(800);
+  while (Date.now() < until) {
+    const t = await chrome.tabs.get(tabId).catch(() => null);
+    if (!t) throw new Error("Couldn't reach the Amazon Music tab — it was closed.");
+    if (t.status === "complete") break;
+    await sleep(500);
+  }
+  // 2. Its song rows appear (the web player fills the list in after load).
+  onProgress("Waiting for the songs to appear in the Amazon tab…");
+  const amazon = makeAmazonClient(tabId);
+  let last = -1;
+  let steady = 0;
+  while (Date.now() < until) {
+    await sleep(1000);
+    let n = 0;
+    try {
+      n = (await amazon.scanDom()) + (await amazon.countCaptures());
+    } catch (_e) {
+      continue; // the page scripts may not be ready yet right after a reload
+    }
+    if (n > 0 && n === last) steady++;
+    else steady = 0;
+    last = n;
+    if (steady >= 2) return;
+  }
+  // Nothing showed up in time: carry on anyway; the reading reports what it finds.
+}
+
+/** What was read from Amazon so far; read another list, or go on to matching. */
+function amazonFound() {
+  const total = w.amazonLists.reduce((n, l) => n + l.songs.length, 0);
+  const last = w.amazonLists[w.amazonLists.length - 1];
+  return h(
+    "div",
+    {},
+    h("h2", {}, `Found ${plural(last.songs.length, "song")} in "${last.name}"`),
+    h("p", { class: "muted" }, "Check the number against the one Amazon shows for this list. If it's lower, press Read another list and read the same list again — the newer reading replaces this one."),
+    h(
+      "div",
+      { class: "pick-list" },
+      w.amazonLists.map((l, i) =>
+        h(
+          "div",
+          { class: "pick-option" },
+          h("div", { class: `playlist-art tiny${l.isLiked ? " liked" : ""}` }, icon(l.isLiked ? "heart" : "music")),
+          h("div", { class: "grow" }, h("strong", {}, l.name), h("div", { class: "muted small" }, l.songs.slice(0, 3).map((s) => s.title).join(" · ") + (l.songs.length > 3 ? " …" : ""))),
+          h("span", { class: "muted" }, plural(l.songs.length, "song")),
+          button("", { kind: "ghost", size: "sm", iconName: "x", title: "Leave this list out", onClick: () => (w.amazonLists.splice(i, 1), go(w.amazonLists.length ? "amazonFound" : "choose")) })
+        )
+      )
+    ),
+    h(
+      "div",
+      { class: "note" },
+      icon("help"),
+      h("span", {}, "Want more of your Amazon lists? Open the next one in the Amazon tab, then press ", h("strong", {}, "Read another list"), ".")
+    ),
+    h(
+      "div",
+      { class: "wizard-nav" },
+      button("Read another list", { kind: "secondary", iconName: "plus", onClick: () => ((w.amazonName = ""), (w.amazonIsLiked = false), go("choose")) }),
+      button(`Find ${plural(total, "song")} on YouTube Music`, {
+        kind: "primary",
+        iconName: "search",
+        onClick: () => {
+          w.songs = w.amazonLists.flatMap((l) => l.songs);
+          w.warnings = [];
+          runMatching();
+        },
+      })
+    )
+  );
+}
+
+// ---- "A list of songs" (any app) ----
+
+function chooseList() {
+  const area = h("textarea", {
+    class: "input list-input",
+    rows: 10,
+    placeholder: "Paste here. For example:\nTum Hi Ho - Arijit Singh\nYellow - Coldplay",
+    "aria-label": "Your list of songs",
+    oninput: (e) => {
+      w.listText = e.target.value;
+      w.list = null;
+      refresh();
+    },
+  });
+  area.value = w.listText;
+  const nameInput = h("input", { type: "text", class: "input", value: w.listName, placeholder: "e.g. My Amazon favourites", "aria-label": "Name for this list", oninput: (e) => (w.listName = e.target.value) });
+  const fileInput = h("input", { type: "file", accept: ".csv,.tsv,.txt,text/csv,text/plain", class: "visually-hidden", id: "list-file" });
+  fileInput.addEventListener("change", async () => {
+    const f = fileInput.files[0];
+    if (!f) return;
+    if (f.size > MAX_BACKUP_BYTES) return errorDialog(new Error("That file is too big."), { title: "Can't use that file" });
+    w.listText = await f.text();
+    if (!w.listName) w.listName = f.name.replace(/\.[^.]+$/, "");
+    w.list = null;
+    render();
+    readList();
+  });
+  const preview = h("div");
+  const next = button("Read the list", { kind: "primary", iconName: "check", onClick: () => (w.list ? startList() : readList()) });
+  function refresh() {
+    next.disabled = !w.listText.trim();
+    next.querySelector("span:last-child").textContent = w.list ? `Find ${plural(w.list.songs.length, "song")} on YouTube Music` : "Read the list";
+    if (!w.list) preview.replaceChildren();
+  }
+  function readList() {
+    try {
+      w.list = parseSongList(w.listText, w.listName.trim() || "Imported list");
+    } catch (err) {
+      w.list = null;
+      mount(preview, h("p", { class: "note danger" }, icon("alert"), h("span", {}, String(err.message || err))));
+      refresh();
+      return;
+    }
+    const FORMAT = { spreadsheet: "a spreadsheet", "copied page": "text copied from a web page", lines: "one song per line" };
+    mount(
+      preview,
+      h(
+        "div",
+        { class: "list-preview" },
+        h("strong", {}, `Found ${plural(w.list.songs.length, "song")}`, w.list.collections.length > 1 ? ` in ${plural(w.list.collections.length, "list")}` : "", ` (read as ${FORMAT[w.list.format]})`),
+        h(
+          "div",
+          { class: "result-list" },
+          w.list.songs.slice(0, 6).map((s) => h("div", { class: "result-row" }, h("div", { class: "grow" }, h("strong", {}, s.title), h("div", { class: "muted small" }, s.artists || "No artist given", s.album ? ` · ${s.album}` : ""))))
+        ),
+        w.list.songs.length > 6 ? h("p", { class: "muted small" }, `…and ${(w.list.songs.length - 6).toLocaleString()} more. If these look wrong, change the text above and read it again.`) : null
+      )
+    );
+    refresh();
+  }
+  if (w.list) setTimeout(readList, 0);
+  refresh();
+  return h(
+    "div",
+    {},
+    h("h2", {}, "Paste or upload your list of songs"),
+    h(
+      "details",
+      { class: "howto-box" },
+      h("summary", {}, "Where do I get a list?"),
+      h(
+        "ul",
+        {},
+        h("li", {}, h("strong", {}, "From Amazon Music (or most music websites): "), "open the playlist, click on the page, press ", h("kbd", {}, "Ctrl"), " + ", h("kbd", {}, "A"), " then ", h("kbd", {}, "Ctrl"), " + ", h("kbd", {}, "C"), ", and paste it here. Scroll to the bottom of the playlist first so every song has loaded."),
+        h("li", {}, h("strong", {}, "From any app: "), "free websites such as TuneMyMusic or Soundiiz can save your library as a spreadsheet (CSV) file. Upload that file here."),
+        h("li", {}, h("strong", {}, "Typing it yourself: "), "one song per line, like ", h("code", {}, "Song name - Artist"), ".")
+      )
+    ),
+    area,
+    h("div", { class: "row-between list-actions" }, h("label", { class: "btn btn-secondary btn-sm", for: "list-file" }, icon("save"), h("span", {}, "Upload a file instead")), fileInput),
+    h("label", { class: "field-label" }, "What should this list be called?"),
+    nameInput,
+    h("p", { class: "muted small" }, "Used as the playlist name if you choose to keep your lists. A spreadsheet with a playlist column keeps its own playlist names."),
+    preview,
+    h("div", { class: "wizard-nav" }, button("Back", { kind: "ghost", iconName: "back", onClick: () => go("connect") }), next)
+  );
+}
+
+async function startList() {
+  w.songs = w.list.songs;
+  w.warnings = [];
+  await runMatching();
 }
 
 function reading() {
@@ -837,9 +1014,12 @@ function destination() {
   const selected = w.matches.filter((m) => m.include);
   const cols = collectionsInImport();
   const hasPlaylists = [...cols].some((n) => n !== "♥");
-  const defaultName = w.source.key === "amazon" && (w.amazonName || "").trim() ? w.amazonName.trim() : `From ${w.source.name}`;
+  const lists = [...cols];
+  const onlyList = lists.length === 1 && lists[0] !== "♥" ? lists[0] : null;
+  const defaultName = onlyList || `From ${w.source.title}`;
   if (!w.playlistName) w.playlistName = defaultName;
-  if (!w.mode) w.mode = w.source.key === "amazon" ? (w.amazonIsLiked ? "liked" : "single") : hasPlaylists ? "mirror" : "liked";
+  const canMirror = w.source.key !== "backup" && hasPlaylists && lists.length > 1;
+  if (!w.mode) w.mode = canMirror ? "mirror" : lists.length === 1 && lists[0] === "♥" ? "liked" : hasPlaylists ? "single" : "liked";
 
   const nameInput = h("input", { type: "text", class: "input", value: w.playlistName, "aria-label": "Playlist name", oninput: (e) => ((w.playlistName = e.target.value), update()) });
   const go_ = button("", { kind: "primary", iconName: "download", onClick: startAdding });
@@ -864,7 +1044,7 @@ function destination() {
   }
 
   const mirrorText =
-    `Liked songs go into your Liked songs, and each ${w.source.name} playlist becomes a YouTube Music playlist with the same name ` +
+    `Liked songs go into your Liked songs, and each ${w.source.key === "list" ? "list" : `${w.source.title} playlist`} becomes a YouTube Music playlist with the same name ` +
     `(${plural([...cols].filter((n) => n !== "♥").length, "playlist")}). If one with that name already exists, the songs are added to it.`;
 
   const view = h(
@@ -874,7 +1054,7 @@ function destination() {
     h(
       "div",
       { class: "radio-stack" },
-      w.source.key === "jiosaavn" && hasPlaylists ? option("mirror", "list", "Same as on JioSaavn (recommended)", mirrorText) : null,
+      canMirror ? option("mirror", "list", `Keep the same lists as on ${w.source.key === "list" ? "your list" : w.source.title} (recommended)`, mirrorText) : null,
       option("liked", "heart", "Add them to my Liked songs", "Every song gets a like. Easy to find later under Liked songs."),
       option("single", "music", "Put them all in one playlist", "If a playlist with this name already exists, the songs are added to it.", h("div", { class: "inline-field" }, nameInput))
     ),

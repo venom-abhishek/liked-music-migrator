@@ -96,6 +96,8 @@
       switch (message.action) {
         case "getCaptures":
         case "countCaptures":
+        case "scanDom":
+        case "getDomRows":
         case "clearCaptures": {
           const resp = await callInject(message.action, message.args);
           sendResponse(resp);

@@ -109,6 +109,97 @@
     window.Worker.prototype = NativeWorker.prototype;
   }
 
+  // ---- Second, independent way in: read the rows off the page itself ----
+  //
+  // Amazon's web player turns the same Skyfire row data into web components
+  // whose attributes/properties carry the same fields (primaryText,
+  // secondaryText1/2/3, a link containing trackAsin). Reading those works
+  // even when the network data isn't captured (a cached page, a response
+  // shape we don't recognise). The list is virtualised — rows scrolled away
+  // are removed — so rows are collected on every scroll step and kept,
+  // per page. Looked up by field name, not by element name, so a renamed
+  // component still works. Runs in the MAIN world so it can see component
+  // properties as well as attributes.
+  const domRows = new Map(); // pageKey -> Map(rowKey -> row)
+  const headings = new Map(); // pageKey -> the list's name as shown on the page
+  const MAX_NODES = 60000;
+  const DURATION_RE = /^\d{1,2}:\d{2}(:\d{2})?$/;
+  const ASIN_RE = /[?&]trackAsin=([A-Z0-9]{8,})/;
+
+  function field(el, attr, prop) {
+    const a = el.getAttribute && el.getAttribute(attr);
+    if (a != null && a !== "") return a;
+    try {
+      const v = el[prop];
+      return typeof v === "string" ? v : null;
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  function linkText(el) {
+    const parts = [];
+    for (const attr of ["primary-href", "href", "primary-link", "secondary-href-1", "data-href"]) {
+      const v = el.getAttribute && el.getAttribute(attr);
+      if (v) parts.push(v);
+    }
+    try {
+      for (const prop of ["primaryHref", "primaryLink", "href"]) {
+        const v = el[prop];
+        if (typeof v === "string") parts.push(v);
+        else if (v && typeof v.deeplink === "string") parts.push(v.deeplink);
+      }
+    } catch (_e) {}
+    const a = el.querySelector && el.querySelector("a[href*='trackAsin']");
+    if (a) parts.push(a.getAttribute("href"));
+    return parts.join(" ");
+  }
+
+  function scanDom() {
+    const key = currentPageKey();
+    if (!domRows.has(key)) domRows.set(key, new Map());
+    const rows = domRows.get(key);
+    let budget = MAX_NODES;
+    const visit = (root) => {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+      for (let el = walker.currentNode; el && budget-- > 0; el = walker.nextNode()) {
+        if (el.nodeType === 1) {
+          if (!headings.has(key)) {
+            const headline = el.getAttribute && el.getAttribute("headline");
+            if (headline && headline.trim()) headings.set(key, headline.trim().slice(0, 200));
+          }
+          const title = field(el, "primary-text", "primaryText");
+          if (title && title.trim()) {
+            const artist = field(el, "secondary-text-1", "secondaryText1") || "";
+            const album = field(el, "secondary-text-2", "secondaryText2") || "";
+            const third = field(el, "secondary-text-3", "secondaryText3") || field(el, "duration", "duration") || "";
+            const asin = (ASIN_RE.exec(linkText(el)) || [])[1] || null;
+            // Only song rows: they carry a track link or a duration. (The
+            // page header and album/artist tiles have primary text too.)
+            if (asin || DURATION_RE.test(third.trim())) {
+              const rowKey = asin || `${title}|${artist}|${album}`;
+              if (!rows.has(rowKey)) rows.set(rowKey, { asin, title: title.trim(), artist: artist.trim(), album: album.trim(), duration: DURATION_RE.test(third.trim()) ? third.trim() : "", order: rows.size });
+            }
+          }
+          if (el.shadowRoot) visit(el.shadowRoot);
+        }
+      }
+    };
+    visit(document.documentElement);
+    return rows.size;
+  }
+
+  function pageHeading() {
+    // The playlist's name as shown on the page, for naming the import:
+    // a "headline" attribute anywhere (found during scanDom, which also
+    // looks inside shadow roots), else a plain heading.
+    const key = currentPageKey();
+    if (headings.has(key)) return headings.get(key);
+    const h = document.querySelector("[headline], music-detail-header, h1");
+    const t = h && (h.getAttribute("headline") || h.getAttribute("primary-text") || h.textContent);
+    return (t || "").trim().slice(0, 200) || null;
+  }
+
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     const msg = event.data;
@@ -132,8 +223,19 @@
         result = { ok: true, count: buffer.filter((c) => c.pageKey === key).length };
         break;
       }
+      case "scanDom":
+        result = { ok: true, count: scanDom() };
+        break;
+      case "getDomRows": {
+        scanDom();
+        const rows = domRows.get(currentPageKey());
+        result = { ok: true, rows: rows ? [...rows.values()] : [], heading: pageHeading() };
+        break;
+      }
       case "clearCaptures":
         buffer.length = 0;
+        domRows.clear();
+        headings.clear();
         result = { ok: true };
         break;
       default:

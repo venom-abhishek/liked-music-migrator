@@ -206,6 +206,7 @@ function renderDetailShell() {
       h(
         "div",
         { class: "detail-tools" },
+        isLiked ? button("Copy all to a playlist", { kind: "secondary", iconName: "plus", title: "Put every liked song into a playlist as well. Nothing is un-liked.", onClick: () => run(() => doCopy(state ? state.tracks : [])) }) : null,
         button("Save a copy", { kind: "ghost", iconName: "save", title: "Download this list as a backup or a spreadsheet", onClick: saveCopy }),
         button("Reload", { kind: "ghost", iconName: "refresh", title: "Get the latest from YouTube Music", onClick: loadTracks })
       )
@@ -347,7 +348,8 @@ function updateSelectionUI() {
     h(
       "div",
       { class: "action-bar-buttons" },
-      button("Move to…", { kind: "primary", iconName: "move", onClick: () => run(doMove) }),
+      button("Copy to…", { kind: isLiked ? "primary" : "secondary", iconName: "plus", title: "Add them to another playlist and keep them here too", onClick: () => run(() => doCopy()) }),
+      button("Move to…", { kind: isLiked ? "secondary" : "primary", iconName: "move", title: "Add them to another playlist and take them out of this one", onClick: () => run(doMove) }),
       isLiked
         ? button("Un-like", { kind: "danger", iconName: "heart", onClick: () => run(doUnlike) })
         : button("Remove from playlist", { kind: "danger", iconName: "trash", onClick: () => run(doRemove) }),
@@ -494,13 +496,19 @@ async function doUnlike() {
 }
 
 /** Destination picker. Resolves { kind, id, title } or { newName } or null. */
-async function pickDestination(tracks) {
+/**
+ * Destination picker for Move and Copy. Resolves { kind, id, title } or
+ * { newName } or null. `copy`: the songs stay where they are, so the
+ * wording (and the note about Liked songs) differ.
+ */
+async function pickDestination(tracks, { copy = false } = {}) {
+  const verb = copy ? "Copy" : "Move";
   const targets = collections.filter((c) => !(c.kind === current.kind && c.id === current.id));
   let choice = null;
   const newName = h("input", { type: "text", class: "input", placeholder: "Name for the new playlist", "aria-label": "New playlist name" });
   const filter = h("input", { type: "search", class: "input", placeholder: "Find a playlist", "aria-label": "Find a playlist" });
   const list = h("div", { class: "pick-list", role: "radiogroup" });
-  const confirmBtn = button("Move here", { kind: "primary", iconName: "move", disabled: true });
+  const confirmBtn = button(`${verb} here`, { kind: "primary", iconName: copy ? "plus" : "move", disabled: true });
 
   function option(value, label, sub, iconName) {
     const input = h("input", { type: "radio", name: "dest", value, class: "radio" });
@@ -531,8 +539,8 @@ async function pickDestination(tracks) {
   renderOptions();
 
   const result = await openDialog({
-    title: `Move ${plural(tracks.length, "song")} to…`,
-    iconName: "move",
+    title: `${verb} ${plural(tracks.length, "song")} to…`,
+    iconName: copy ? "plus" : "move",
     wide: true,
     body: (close) => {
       confirmBtn.addEventListener("click", () => close("go"));
@@ -540,9 +548,11 @@ async function pickDestination(tracks) {
       return h(
         "div",
         {},
-        current.kind === "liked"
-          ? h("p", { class: "note" }, icon("help"), "Moving songs out of Liked songs also un-likes them. To keep them liked, they'll need to be liked again.")
-          : null,
+        copy
+          ? h("p", { class: "note" }, icon("checkCircle"), h("span", {}, current.kind === "liked" ? "They stay in your Liked songs too — nothing is un-liked." : `They stay in "${current.title}" too.`))
+          : current.kind === "liked"
+            ? h("p", { class: "note" }, icon("help"), h("span", {}, "Moving songs out of Liked songs also un-likes them. To keep them liked, use ", h("strong", {}, "Copy to…"), " instead."))
+            : null,
         targets.length > 6 ? filter : null,
         list,
         h("div", { class: "new-name", hidden: true }, newName),
@@ -555,6 +565,100 @@ async function pickDestination(tracks) {
   const [kind, id] = choice.split(/:(.+)/);
   const c = collections.find((x) => x.kind === kind && x.id === id);
   return { kind: c.kind, id: c.id, title: c.title };
+}
+
+const COPY_CHUNK = 50;
+
+/**
+ * Copy: add the songs to another playlist (or like them) and leave them
+ * where they are. Same safety as Move: write-ahead history record, songs
+ * already in the destination are skipped, playlist adds go in chunks of 50
+ * (so "copy all 3,000 liked songs" works), and Undo takes back out only
+ * what this copy added.
+ */
+async function doCopy(tracksOverride) {
+  const all = tracksOverride || selectedTracks();
+  if (!all.length) return;
+  // The same song only once, even if it is in this list twice.
+  const seenIds = new Set();
+  const tracks = all.filter((t) => (seenIds.has(t.videoId) ? false : (seenIds.add(t.videoId), true)));
+  const picked = await pickDestination(tracks, { copy: true });
+  if (!picked) return;
+  const destination = picked.newName ? { kind: "playlist", id: null, title: picked.newName } : picked;
+  setBusy("Getting ready…");
+
+  let alreadyInDest = new Set();
+  if (destination.id) {
+    const browseId = destination.kind === "liked" ? LIKED_BROWSE_ID : playlistIdToBrowseId(destination.id);
+    alreadyInDest = new Set((await fetchAllTracks(client, browseId)).map((t) => t.videoId));
+  }
+  const toAdd = tracks.filter((t) => !alreadyInDest.has(t.videoId));
+  const skipped = tracks.length - toAdd.length;
+  if (!toAdd.length) {
+    selection.clear();
+    renderList();
+    toast(`All ${plural(tracks.length, "song")} ${tracks.length === 1 ? "is" : "are"} already in "${destination.title}". Nothing to copy.`, { tone: "success" });
+    return;
+  }
+
+  const record = await startAction(
+    ACTION_TYPES.COPY,
+    { kind: current.kind, id: current.id, title: current.title },
+    destination,
+    toAdd.map((t) => ({ ...toLogTrack(t), setVideoId: null, added: false }))
+  );
+  let added = 0;
+  try {
+    if (picked.newName) {
+      setBusy(`Creating "${picked.newName}"…`);
+      const playlistId = await client.createPlaylist(picked.newName, "Created by Music Mover");
+      destination.id = playlistId;
+      record.createdPlaylistId = playlistId;
+      await saveAction(record);
+      collections.push({ kind: "playlist", id: playlistId, browseId: playlistIdToBrowseId(playlistId), title: picked.newName, count: 0 });
+    }
+    if (destination.kind === "liked") {
+      for (let i = 0; i < toAdd.length; i++) {
+        setBusy(`Liking ${i + 1} of ${toAdd.length}…`);
+        await client.likeSong(toAdd[i].videoId);
+        record.tracks[i].added = true;
+        added++;
+        await saveAction(record);
+        await sleep(150);
+      }
+    } else {
+      for (let start = 0; start < toAdd.length; start += COPY_CHUNK) {
+        const chunk = toAdd.slice(start, start + COPY_CHUNK);
+        setBusy(`Copying to "${destination.title}": ${Math.min(start + chunk.length, toAdd.length).toLocaleString()} of ${toAdd.length.toLocaleString()}…`);
+        const resp = await client.addPlaylistItems(destination.id, chunk.map((t) => t.videoId));
+        const setIds = {};
+        for (const r of (resp && resp.playlistEditResults) || []) {
+          const d = r && r.playlistEditVideoAddedResultData;
+          if (d && d.videoId && d.setVideoId) setIds[d.videoId] = d.setVideoId;
+        }
+        chunk.forEach((t, j) => {
+          const rec = record.tracks[start + j];
+          rec.added = true;
+          rec.setVideoId = setIds[t.videoId] || null;
+        });
+        added += chunk.length;
+        await saveAction(record);
+      }
+    }
+    await finishAction(record);
+  } catch (err) {
+    await finishAction(record, err);
+    throw new Error(`The copy stopped after ${plural(added, "song")}: ${err.message || err}. What was copied is listed in History, where you can undo it.`);
+  } finally {
+    const dest = collections.find((c) => c.kind === destination.kind && c.id === destination.id);
+    if (dest && dest.count != null) dest.count += added;
+    selection.clear();
+    renderList();
+  }
+  offerUndo(
+    `Copied ${plural(added, "song")} to "${destination.title}".` + (skipped ? ` (${skipped} ${skipped === 1 ? "was" : "were"} already there.)` : "") + (current.kind === "liked" ? " They're still in your Liked songs." : ""),
+    record
+  );
 }
 
 async function doMove() {

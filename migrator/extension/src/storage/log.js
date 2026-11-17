@@ -30,6 +30,7 @@ export const ACTION_TYPES = {
   MOVE: "move", // tracks added to destination + removed from source
   PLAYLIST_CREATE: "playlist_create",
   IMPORT: "import", // tracks written to a destination from an external source (JioSaavn / Amazon)
+  COPY: "copy", // tracks added to a destination, left where they were (e.g. Liked songs → a playlist)
 };
 
 export const STATUS = {
@@ -143,6 +144,7 @@ export function hasUndoableEffect(action) {
     [ACTION_TYPES.UNLIKE]: ["unliked"],
     [ACTION_TYPES.MOVE]: ["addedToDest", "removedFromSource"],
     [ACTION_TYPES.IMPORT]: ["added"],
+    [ACTION_TYPES.COPY]: ["added"],
   }[action.type];
   if (!flags) return true;
   return action.tracks.some((t) => flags.some((f) => t[f]));
@@ -232,6 +234,9 @@ export async function performUndo(client, action) {
       break;
     }
 
+    // A copy is undone exactly like an import: take back out what it added
+    // (the originals were never touched, so there is nothing to restore).
+    case ACTION_TYPES.COPY:
     case ACTION_TYPES.IMPORT: {
       const added = action.tracks.filter((t) => stepDone(action, t, "added"));
       if (action.destination.kind === "liked") {

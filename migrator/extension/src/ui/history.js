@@ -42,7 +42,7 @@ export async function recentActivity(limit = 3) {
 }
 
 function iconFor(a) {
-  return { remove: "trash", unlike: "heart", move: "move", import: "download", playlist_create: "plus" }[a.type] || "history";
+  return { remove: "trash", unlike: "heart", move: "move", copy: "plus", import: "download", playlist_create: "plus" }[a.type] || "history";
 }
 
 export function describe(action) {
@@ -56,6 +56,8 @@ export function describe(action) {
       return `Un-liked ${n}`;
     case ACTION_TYPES.MOVE:
       return `Moved ${n} from "${src}" to ${action.createdPlaylistId ? "a new playlist, " : ""}"${dst}"`;
+    case ACTION_TYPES.COPY:
+      return `Copied ${n} from "${src}" to ${action.destination.kind === "liked" ? "your Liked songs" : `${action.createdPlaylistId ? "a new playlist, " : ""}"${dst}"`}`;
     case ACTION_TYPES.PLAYLIST_CREATE:
       return `Created the playlist "${dst}"`;
     case ACTION_TYPES.IMPORT: {
@@ -74,6 +76,7 @@ const FLAG = {
   [ACTION_TYPES.UNLIKE]: "unliked",
   [ACTION_TYPES.MOVE]: "removedFromSource",
   [ACTION_TYPES.IMPORT]: "added",
+  [ACTION_TYPES.COPY]: "added",
 };
 
 function statusChip(action) {

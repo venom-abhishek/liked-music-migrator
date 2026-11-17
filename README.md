@@ -6,7 +6,7 @@ liked songs / playlists into it from other services (**JioSaavn** and
 No servers, no accounts to create, no paid services, and **no AI/LLM calls at
 runtime**: matching is deterministic string+duration logic.
 
-> **Status: Phases 0-3 complete, Phase 4 mostly done (v0.4).** The
+> **Status: Phases 0-3 complete, Phase 4 mostly done (v0.5).** The
 > manager works for YouTube Music (list, sort/filter/select, remove/un-like/
 > move, undo), and both JioSaavn and Amazon Music can be extracted, matched,
 > and imported (Like all / single playlist / mirror playlists), with a
@@ -67,8 +67,11 @@ The extension opens as its own tab with four sections:
 - **Home**: shows whether YouTube Music is connected (with a one-click fix
   if it isn't) and links to the two main jobs.
 - **My music**: your playlists and Liked songs. Open one, search or sort,
-  tick songs (shift-click selects a range), then **Move to…**, **Remove**
-  or **Un-like** from the bar at the bottom. **Quick select** picks every
+  tick songs (shift-click selects a range), then **Copy to…** (adds them
+  to another playlist and keeps them where they are; e.g. Liked songs into
+  a playlist without un-liking anything), **Move to…**, **Remove** or
+  **Un-like** from the bar at the bottom. Liked songs also has a one-click
+  **Copy all to a playlist**. **Quick select** picks every
   song **by an artist**, or the extra copies of **duplicates**. Every change asks first and
   shows an **Undo** button afterwards. **Save a copy** downloads the list
   as a **backup file** (which can be brought back in later) or a

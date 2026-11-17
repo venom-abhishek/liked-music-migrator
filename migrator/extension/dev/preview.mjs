@@ -118,6 +118,35 @@ const backupPath = path.join(out, "workout-backup.json");
 await download.saveAs(backupPath);
 await page.close();
 
+// ---- Copy all liked songs into a new playlist (likes untouched) ----
+page = await open({ name: "copy" }, { hash: "#library" });
+await page.waitForSelector(".playlist-card");
+await page.locator(".playlist-card.liked").click();
+await page.waitForFunction(() => /348 songs/.test(document.querySelector(".detail-title")?.textContent || ""));
+await page.locator(".track-row").nth(0).click();
+await page.locator(".track-row").nth(1).click();
+await snap(page, "library-liked-copy-bar");
+await page.locator(".action-bar button", { hasText: "Clear" }).click();
+await clickText(page, "Copy all to a playlist");
+await page.waitForSelector(".dialog");
+await page.locator(".pick-option", { hasText: "A new playlist" }).click();
+await page.locator(".new-name input").fill("All my likes");
+await snap(page, "library-copy-dialog");
+await page.locator(".dialog button", { hasText: "Copy here" }).click();
+await page.waitForSelector(".toast >> text=Copied 348 songs", { timeout: 30000 });
+const likedAfter = await page.textContent(".detail-title");
+if (!/348 songs/.test(likedAfter)) errors.push(`copy changed Liked songs: ${likedAfter}`);
+const adds = await page.evaluate(() => window.__calls.filter((c) => c[0] === "addPlaylistItems").map((c) => c[1][1].length));
+if (adds.join(",") !== "50,50,50,50,50,50,48") errors.push(`copy batches: ${adds}`);
+const unlikes = await page.evaluate(() => window.__calls.filter((c) => c[0] === "removeLikeSong").length);
+if (unlikes) errors.push(`copy un-liked ${unlikes} songs`);
+await snap(page, "library-copy-done");
+await page.locator('.tabs [data-nav="history"]').click();
+await page.waitForSelector(".history-card");
+const top = await page.textContent(".history-card .history-title");
+if (!/Copied 348 songs from "Liked songs" to a new playlist, "All my likes"/.test(top)) errors.push(`history: ${top}`);
+await page.close();
+
 page = await open({ name: "liked-dark" }, { dark: true, hash: "#library" });
 await page.waitForSelector(".playlist-card");
 await page.locator(".playlist-card.liked").click();

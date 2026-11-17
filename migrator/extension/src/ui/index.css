@@ -657,7 +657,7 @@ label.result-row { cursor: pointer; }
 .history-songs summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 0.9rem; width: fit-content; }
 .history-icon { display: inline-flex; padding: 0.6rem; border-radius: 12px; background: var(--surface-2); color: var(--muted); flex: none; }
 .history-icon.remove, .history-icon.unlike { background: var(--danger-soft); color: var(--danger); }
-.history-icon.move, .history-icon.playlist_create { background: var(--accent-soft); color: var(--accent); }
+.history-icon.move, .history-icon.copy, .history-icon.playlist_create { background: var(--accent-soft); color: var(--accent); }
 .history-icon.import { background: var(--success-soft); color: var(--success); }
 .nothing { align-self: center; white-space: nowrap; }
 

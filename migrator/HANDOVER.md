@@ -1,6 +1,6 @@
 # Handover — liked-music-migrator browser extension
 
-**Last updated:** 2026-10-13
+**Last updated:** 2026-11-17
 **Written for:** a fresh Claude Code session picking this up with no memory of prior conversations. Read this file fully before doing anything else. It's self-contained.
 
 ## What this is
@@ -120,6 +120,13 @@ The wizard also reloads the Amazon tab itself and can read several lists before 
 - CSV/TSV with a header. Column names from TuneMyMusic, Soundiiz and Exportify are recognised, and a playlist column keeps lists apart. A list named like "Liked Songs" goes to Liked.
 - "Title - Artist" lines.
 - Text copied off a web page, where each song is a block ending in its duration.
+
+## Copy to… (2026-11-17, v0.5.0)
+
+**Copy to…** in My music adds the selected songs to a new or existing playlist (or likes them) and leaves the originals where they are. Liked songs also gets a one-click **Copy all to a playlist**.
+- It's a new action type, `ACTION_TYPES.COPY`, in `storage/log.js`. Undo works like an import's: only the songs this copy added are taken back out, and a playlist it created is deleted if it holds nothing else.
+- Adds go in chunks of 50, songs already in the destination are skipped, and the history record is write-ahead like every other action.
+- Covered by unit tests and by the preview click-through: 348 liked songs copied in batches of 50, nothing un-liked.
 
 ## Needs a live check by the operator (not verifiable from here)
 

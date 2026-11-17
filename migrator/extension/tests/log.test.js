@@ -150,3 +150,20 @@ test("an already-undone action can't be undone twice", async () => {
   await performUndo(client, rec);
   await assert.rejects(performUndo(client, rec), /already undone/);
 });
+
+test("undoing a copy from Liked songs takes the copies back out and never touches the likes", async () => {
+  const client = fakeYtClient({ LM: [{ videoId: "a" }, { videoId: "b" }], DST: [{ videoId: "x", setVideoId: "sx" }, { videoId: "a", setVideoId: "c1" }, { videoId: "b", setVideoId: "c2" }] });
+  const rec = await logAction(ACTION_TYPES.COPY, LIKED, PL("DST"), [t("a", { added: true, setVideoId: "c1" }), t("b", { added: true, setVideoId: "c2" })]);
+  await performUndo(client, rec);
+  assert.deepEqual(client.calls, [["remove", "DST", ["a", "b"]]]);
+  assert.deepEqual(client.state.DST.map((x) => x.videoId), ["x"]);
+  assert.equal(client.state.LM.length, 2);
+});
+
+test("undoing a copy into a playlist it created deletes that playlist", async () => {
+  const client = fakeYtClient({ LM: [{ videoId: "a" }], PLnew: [{ videoId: "a", setVideoId: "c1" }] });
+  const rec = await logAction(ACTION_TYPES.COPY, LIKED, PL("PLnew"), [t("a", { added: true, setVideoId: "c1" })], { createdPlaylistId: "PLnew" });
+  await performUndo(client, rec);
+  assert.deepEqual(client.calls, [["delete", "PLnew"]]);
+  assert.equal(client.state.LM.length, 1);
+});
